@@ -129,6 +129,7 @@ body {
 }
 
 #new-chat-btn,
+#sessions-btn,
 #context-btn,
 #settings-btn {
   padding: 4px 8px;
@@ -138,9 +139,11 @@ body {
   border-radius: 4px;
   cursor: pointer;
   font-size: 14px;
+  line-height: 1;
 }
 
 #new-chat-btn:hover,
+#sessions-btn:hover,
 #context-btn:hover,
 #settings-btn:hover {
   background: var(--vscode-button-secondaryHoverBackground);
@@ -606,7 +609,8 @@ body {
 
 #settings-header,
 #editor-header,
-#context-header {
+#context-header,
+#sessions-header {
   display: flex;
   gap: 8px;
   padding: 8px;
@@ -616,7 +620,8 @@ body {
 
 #settings-header button,
 #editor-header button,
-#context-header button {
+#context-header button,
+#sessions-header button {
   background: none;
   border: none;
   color: var(--vscode-foreground);
@@ -628,7 +633,8 @@ body {
 
 #settings-header button:hover,
 #editor-header button:hover,
-#context-header button:hover {
+#context-header button:hover,
+#sessions-header button:hover {
   background: var(--vscode-button-secondaryHoverBackground);
 }
 
@@ -1103,18 +1109,16 @@ body {
   height: 100%;
 }
 
-#sessions-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--vscode-panel-border);
-}
+/* sessions-header styled via shared rule above */
 
 #sessions-list {
   flex: 1;
   overflow-y: auto;
   padding: 4px 0;
+}
+
+.session-card + .session-card {
+  border-top: 1px solid var(--vscode-panel-border);
 }
 
 .session-card {

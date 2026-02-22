@@ -467,6 +467,15 @@ Rules:
     // Initialize smart-todo state
     this.sessionManager.initSmartTodo(sessionId, userText);
 
+    // If in sandboxed-smart-todo mode, prepend sandbox context to all prompts
+    const isSandboxed = this.modeManager.isSandboxedSmartTodoMode();
+    const sandboxPreamble = isSandboxed
+      ? `**SANDBOX MODE ACTIVE:** You are working inside a sandboxed environment with OS-level isolation. ` +
+        `Use runSandboxedCommand for isolated command execution. ` +
+        `Dangerous commands (sudo, pkill, killall, rm -rf /, etc.) are always blocked. ` +
+        `Create a sandbox with createSandbox for full git worktree + OS-level isolation if needed.\n\n`
+      : '';
+
     // Notify the webview that we're in smart-todo mode
     this.postSessionMessage(sessionId, {
       type: 'smartTodoUpdate',
@@ -477,7 +486,7 @@ Rules:
 
     // ── Phase 1: Planning ───────────────────────────────────────────────
     try {
-      const planningPrompt = ChatViewProvider.SMART_TODO_PLANNING_PROMPT;
+      const planningPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_PLANNING_PROMPT;
       const planResponse = await this.sendOneLLMRound(
         sessionId,
         userText,
@@ -516,7 +525,7 @@ Rules:
         if (!this.sessionManager.getSession(sessionId)) { break; }
 
         // ── Execution pass ──────────────────────────────────────────────
-        const execPrompt = ChatViewProvider.SMART_TODO_EXECUTION_PROMPT
+        const execPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_EXECUTION_PROMPT
           .replace('{PLAN}', planText);
 
         const pendingItems = todos.filter(t => t.status !== 'done').map(t => `- TODO ${t.id}: ${t.title}`).join('\n');
@@ -537,7 +546,7 @@ Rules:
           iteration,
         });
 
-        const verifyPrompt = ChatViewProvider.SMART_TODO_VERIFY_PROMPT
+        const verifyPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_VERIFY_PROMPT
           .replace('{USER_REQUEST}', userText)
           .replace('{PLAN}', planText);
 
@@ -1047,10 +1056,10 @@ Rules:
           <select id="model-select" title="Select model">
             <option value="">No model</option>
           </select>
-          <button id="new-chat-btn" title="New chat">\u2795</button>
-          <button id="sessions-btn" title="Sessions">\u{1F4AC}</button>
-          <button id="context-btn" title="Context">\u{1F4D6}</button>
-          <button id="settings-btn" title="Settings">\u2699</button>
+          <button id="new-chat-btn" title="New chat">+</button>
+          <button id="sessions-btn" title="Sessions">\u2630</button>
+          <button id="context-btn" title="Context">\u2295</button>
+          <button id="settings-btn" title="Settings">\u2699\uFE0E</button>
         </div>
         <div id="file-chips" class="file-chips hidden"></div>
         <div class="input-wrapper">
@@ -1077,7 +1086,7 @@ Rules:
           <button class="steering-btn" data-steer="summarize">Summarize</button>
           <button class="steering-btn" data-steer="expand">Expand</button>
           <span style="flex:1"></span>
-          <button id="stop-btn" class="stop-btn" title="Stop generation" disabled>\u23F9</button>
+          <button id="stop-btn" class="stop-btn" title="Stop generation" disabled>\u25A0</button>
         </div>
         <div id="queue-section" class="hidden">
           <div class="queue-header">

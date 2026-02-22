@@ -39,11 +39,15 @@ export class ModeManager {
     if (this.currentModeId === 'custom' && this.customModes.has('custom')) {
       return this.customModes.get('custom')!;
     }
-    return BUILT_IN_MODES[this.currentModeId as keyof typeof BUILT_IN_MODES] || BUILT_IN_MODES.sandbox;
+    return BUILT_IN_MODES[this.currentModeId as keyof typeof BUILT_IN_MODES] || BUILT_IN_MODES['smart-todo'];
   }
 
   isSmartTodoMode(): boolean {
-    return this.currentModeId === 'smart-todo';
+    return this.currentModeId === 'smart-todo' || this.currentModeId === 'sandboxed-smart-todo';
+  }
+
+  isSandboxedSmartTodoMode(): boolean {
+    return this.currentModeId === 'sandboxed-smart-todo';
   }
 
   async setCurrentMode(modeId: ModeId) {
@@ -85,9 +89,9 @@ export class ModeManager {
         console.error('ModeManager: Failed to delete custom mode', err);
       }
 
-      // Fall back to sandbox mode if we deleted the current mode
+      // Fall back to default mode if we deleted the current mode
       if (this.currentModeId === modeId) {
-        await this.setCurrentMode('sandbox');
+        await this.setCurrentMode(DEFAULT_MODE);
       }
       this._onDidChangeCustomModes.fire();
     }

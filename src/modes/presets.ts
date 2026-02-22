@@ -1,6 +1,39 @@
 import { Mode, ModeId, BuiltinMode } from './types';
 
-export const BUILT_IN_MODES: Record<'sandbox' | 'agent' | 'ask' | 'plan' | 'smart-todo', BuiltinMode> = {
+export const BUILT_IN_MODES: Record<'sandboxed-smart-todo' | 'smart-todo' | 'sandbox' | 'agent' | 'ask' | 'plan', BuiltinMode> = {
+  'sandboxed-smart-todo': {
+    id: 'sandboxed-smart-todo' as const,
+    name: 'Sandboxed Smart To-Do',
+    description: 'Smart To-Do loop with sandbox isolation — plans, executes, and verifies inside a sandboxed environment',
+    systemPrompt: '', // Dynamic — overridden by the Smart To-Do orchestrator in panel.ts (sandbox prompt is prepended)
+    toolPermissions: {
+      readFile: 'allow',
+      writeFile: 'allow',
+      listFiles: 'allow',
+      runTerminal: 'allow',
+      runSandboxedCommand: 'allow',
+      getDiagnostics: 'allow',
+      switchMode: 'allow',
+      createSandbox: 'allow',
+      getSandboxStatus: 'allow',
+      exitSandbox: 'allow',
+    },
+    isBuiltIn: true,
+  },
+  'smart-todo': {
+    id: 'smart-todo' as const,
+    name: 'Smart To-Do',
+    description: 'Iterative plan \u2192 execute \u2192 verify loop until all TODOs are complete',
+    systemPrompt: '', // Dynamic \u2014 overridden by the Smart To-Do orchestrator in panel.ts
+    toolPermissions: {
+      readFile: 'allow',
+      writeFile: 'allow',
+      listFiles: 'allow',
+      runTerminal: 'allow',
+      getDiagnostics: 'allow',
+    },
+    isBuiltIn: true,
+  },
   sandbox: {
     id: 'sandbox' as const,
     name: 'Sandbox Orchestrator',
@@ -91,20 +124,6 @@ export const BUILT_IN_MODES: Record<'sandbox' | 'agent' | 'ask' | 'plan' | 'smar
     isBuiltIn: true,
   },
 
-  'smart-todo': {
-    id: 'smart-todo' as const,
-    name: 'Smart To-Do',
-    description: 'Iterative plan → execute → verify loop until all TODOs are complete',
-    systemPrompt: '', // Dynamic — overridden by the Smart To-Do orchestrator in panel.ts
-    toolPermissions: {
-      readFile: 'allow',
-      writeFile: 'allow',
-      listFiles: 'allow',
-      runTerminal: 'allow',
-      getDiagnostics: 'allow',
-    },
-    isBuiltIn: true,
-  },
 };
 
-export const DEFAULT_MODE: ModeId = 'sandbox';
+export const DEFAULT_MODE: ModeId = 'sandboxed-smart-todo';

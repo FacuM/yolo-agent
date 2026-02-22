@@ -735,7 +735,7 @@
     // Phase indicator
     const phaseEl = document.createElement('div');
     phaseEl.className = 'smart-todo-phase';
-    const phaseIcons = { planning: '\uD83D\uDCCB', executing: '\u2699\uFE0F', verifying: '\u2705' };
+    const phaseIcons = { planning: '\u25B8', executing: '\u2699\uFE0E', verifying: '\u2713' };
     const phaseLabels = { planning: 'Planning', executing: 'Executing', verifying: 'Verifying' };
     phaseEl.textContent = (phaseIcons[phase] || '') + ' ' + (phaseLabels[phase] || phase);
     if (iteration > 0) {
