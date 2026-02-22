@@ -8,30 +8,42 @@ import { ContextManager } from '../context/manager';
 import { McpConfigManager } from '../mcp/config';
 import { McpClient } from '../mcp/client';
 import { McpServerConfig } from '../mcp/types';
-import { SessionManager, BufferedMessage, TodoItem, TodoItemStatus } from '../sessions/manager';
+import { SessionManager, BufferedMessage, TodoItem, TodoItemStatus, SmartTodoPlan } from '../sessions/manager';
+import { AskQuestionTool } from '../tools/question';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'yoloAgent.chatView';
 
   // ===== Smart To-Do prompt templates =====
-  private static readonly SMART_TODO_PLANNING_PROMPT = `You are a meticulous software engineering planner. The user will provide a request. Your job is to:
+  private static readonly SMART_TODO_PLANNING_PROMPT = `You are a meticulous software engineering planner.
 
-1. Analyze the request carefully.
-2. Break it into specific, testable to-do items.
-3. Output a structured plan using **exactly** this format (one item per line):
+IMPORTANT RULES — YOU MUST FOLLOW ALL OF THEM:
+- If the request is clear enough to plan, produce a plan immediately. Make reasonable assumptions for anything unclear.
+- If the request is genuinely ambiguous or missing critical information, you MAY ask clarifying questions INSTEAD of a plan. Format them inside a \`\`\`questions block:
+
+\`\`\`questions
+1. <Your question here?>
+2. <Another question?>
+\`\`\`
+
+- If you produce a plan, you MUST include a \`\`\`plan code block.
+- Do NOT mix questions and a plan in the same response — pick one.
+- Do NOT explain your reasoning, just output the plan or questions.
+- Do NOT use any tools — only output text.
+- Do NOT start implementing — only plan.
+
+When producing a plan, use EXACTLY this format:
 
 \`\`\`plan
 TODO 1: <Short title> — <Brief description of what must be done>
 TODO 2: <Short title> — <Brief description of what must be done>
 TODO 3: <Short title> — <Brief description of what must be done>
-...
 \`\`\`
 
-Rules:
-- Each TODO must be independently verifiable (e.g., "file X exists", "function Y works", "test Z passes").
-- Keep titles concise (under 10 words).
-- Include an E2E / integration verification step as the last TODO.
-- Do NOT start implementing yet — only plan.`;
+Each TODO must be independently verifiable (e.g., "file X exists", "function Y works").
+Keep titles concise (under 10 words).
+Include an E2E / integration verification step as the last TODO.
+For trivial requests, a single TODO is fine — do NOT over-split.`;
 
   private static readonly SMART_TODO_EXECUTION_PROMPT = `You are an expert AI coding assistant operating in Smart To-Do mode. You have a plan to follow.
 
@@ -159,6 +171,11 @@ Rules:
                 ctrl.abort();
                 this.abortControllers.delete(activeId);
               }
+            }
+            // Cancel any pending askQuestion tool
+            const askToolCancel = this.tools.get('askQuestion');
+            if (askToolCancel && (askToolCancel as unknown as AskQuestionTool).hasPendingQuestion()) {
+              (askToolCancel as unknown as AskQuestionTool).cancelPending();
             }
           }
           break;
@@ -319,7 +336,24 @@ Rules:
 
     // --- Smart To-Do orchestration ---
     if (this.modeManager.isSmartTodoMode()) {
+      // Check if we're resuming after clarification questions
+      const smartTodo = this.sessionManager.getSmartTodo(sessionId);
+      if (smartTodo && this.sessionManager.isAwaitingClarification(sessionId)) {
+        await this.resumePlanningWithAnswers(sessionId, text, smartTodo);
+        return;
+      }
+
       await this.runSmartTodoFlow(sessionId, text, fileReferences);
+      return;
+    }
+
+    // --- Check for pending askQuestion tool ---
+    const askTool = this.tools.get('askQuestion');
+    if (askTool && (askTool as unknown as AskQuestionTool).hasPendingQuestion()) {
+      // The user is answering a question the LLM asked via the askQuestion tool.
+      // Show the answer in the webview and resolve the pending promise.
+      this.postSessionMessage(sessionId, { type: 'questionAnswered' });
+      (askTool as unknown as AskQuestionTool).resolveAnswer(text);
       return;
     }
 
@@ -425,13 +459,54 @@ Rules:
 
           const tool = this.tools.get(toolCall.name);
           if (tool) {
-            const result = await tool.execute(toolCall.arguments);
+            // Special handling for askQuestion: post the question to the webview
+            // before executing (execute() will block until the user answers)
+            if (toolCall.name === 'askQuestion') {
+              this.postSessionMessage(sessionId, {
+                type: 'askQuestion',
+                question: (toolCall.arguments.question as string) || 'The assistant has a question for you.',
+                toolCallId: toolCall.id,
+              });
+            }
+
+            // Validate required parameters before execution
+            const validationError = this.validateToolParams(tool, toolCall.arguments);
+            if (validationError) {
+              this.postSessionMessage(sessionId, {
+                type: 'toolCallResult',
+                id: toolCall.id,
+                name: toolCall.name,
+                content: validationError,
+                isError: true,
+              });
+              continue;
+            }
+
+            try {
+              const result = await tool.execute(toolCall.arguments);
+              this.postSessionMessage(sessionId, {
+                type: 'toolCallResult',
+                id: toolCall.id,
+                name: toolCall.name,
+                content: result.content,
+                isError: result.isError,
+              });
+            } catch (toolErr) {
+              this.postSessionMessage(sessionId, {
+                type: 'toolCallResult',
+                id: toolCall.id,
+                name: toolCall.name,
+                content: `Tool execution error: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`,
+                isError: true,
+              });
+            }
+          } else {
             this.postSessionMessage(sessionId, {
               type: 'toolCallResult',
               id: toolCall.id,
               name: toolCall.name,
-              content: result.content,
-              isError: result.isError,
+              content: `Unknown tool: ${toolCall.name}`,
+              isError: true,
             });
           }
         }
@@ -448,12 +523,14 @@ Rules:
       }
       this.sessionManager.setSessionStatus(sessionId, 'idle');
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       this.postSessionMessage(sessionId, {
         type: 'error',
-        message: err instanceof Error ? err.message : String(err),
+        message: errMsg,
       });
       this.sessionManager.setSessionStatus(sessionId, 'error');
-      throw err;
+      // Return error message instead of re-throwing so callers (like smart-todo) can continue
+      return `[ERROR] ${errMsg}`;
     } finally {
       this.abortControllers.delete(sessionId);
     }
@@ -462,6 +539,55 @@ Rules:
   }
 
   // ===== Smart To-Do orchestration =====
+
+  /**
+   * Isolated planning call: no tools, no history, no context additions.
+   * This gives the LLM the best chance to produce a clean plan.
+   */
+  private async sendPlanningRound(
+    sessionId: string,
+    systemPrompt: string,
+    userText: string,
+  ): Promise<string> {
+    const provider = this.registry.getActiveProvider()!;
+    const model = this.registry.getActiveModelId();
+
+    const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userText },
+    ];
+
+    this.postSessionMessage(sessionId, { type: 'waitingForApi' });
+
+    let responseText = '';
+    let firstChunkReceived = false;
+    try {
+      const response = await provider.sendMessage(
+        messages,
+        { model },  // no tools!
+        (chunk) => {
+          if (!firstChunkReceived) {
+            firstChunkReceived = true;
+            this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
+          }
+          this.postSessionMessage(sessionId, { type: 'streamChunk', content: chunk });
+        }
+      );
+      if (!firstChunkReceived) {
+        this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
+      }
+      responseText = response.content ?? '';
+      this.postSessionMessage(sessionId, { type: 'messageComplete' });
+    } catch (err) {
+      this.postSessionMessage(sessionId, {
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+
+    return responseText;
+  }
 
   /**
    * Full Smart To-Do lifecycle:
@@ -494,32 +620,44 @@ Rules:
       iteration: 0,
     });
 
-    // ── Phase 1: Planning ───────────────────────────────────────────────
+    // ── Phase 1: Planning (isolated call — no tools, no history) ────────
     try {
       const planningPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_PLANNING_PROMPT;
-      const planResponse = await this.sendOneLLMRound(
+      const planResponse = await this.sendPlanningRound(
         sessionId,
-        userText,
-        fileReferences,
         planningPrompt,
+        userText,
       );
 
-      // Parse TODOs from the plan response
+      // Check if the LLM asked clarifying questions instead of producing a plan
+      const questions = this.extractClarificationQuestions(planResponse);
       let todos = this.parseTodosFromPlan(planResponse);
 
-      // If parsing failed, retry once with a stronger nudge
+      if (todos.length === 0 && questions) {
+        // The LLM is asking for clarification — pause and wait for user input
+        this.sessionManager.setClarificationState(sessionId, questions, fileReferences);
+        this.postSessionMessage(sessionId, {
+          type: 'smartTodoUpdate',
+          phase: 'awaiting-clarification',
+          todos: [],
+          iteration: 0,
+        });
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        return;
+      }
+
+      // If no plan and no questions, retry once with a stronger nudge
       if (todos.length === 0) {
         this.postSessionMessage(sessionId, {
           type: 'streamChunk',
           content: '\n\n\u26A0\uFE0F Plan format not detected. Retrying planning phase...\n',
         });
 
-        const retryPrompt = sandboxPreamble + `The previous response did not include a \`\`\`plan code block. You MUST respond with a plan in this exact format:\n\n\`\`\`plan\nTODO 1: <Title> \u2014 <Description>\nTODO 2: <Title> \u2014 <Description>\n...\n\`\`\`\n\nDo NOT ask questions. Do NOT explain. ONLY output the plan block. Make reasonable assumptions for any missing details.`;
-        const retryResponse = await this.sendOneLLMRound(
+        const retryPrompt = sandboxPreamble + `CRITICAL: You MUST respond with ONLY a plan block. Nothing else.\n\n\`\`\`plan\nTODO 1: <Title> \u2014 <Description>\nTODO 2: <Title> \u2014 <Description>\n\`\`\`\n\nThe user request is below. Create a plan for it. Do NOT ask questions. Do NOT explain. ONLY output the plan block.`;
+        const retryResponse = await this.sendPlanningRound(
           sessionId,
-          userText,
-          fileReferences,
           retryPrompt,
+          userText,
         );
         todos = this.parseTodosFromPlan(retryResponse);
       }
@@ -533,95 +671,7 @@ Rules:
         });
       }
 
-      this.sessionManager.setSmartTodoItems(sessionId, todos);
-      this.sessionManager.setSmartTodoPhase(sessionId, 'executing');
-
-      this.postSessionMessage(sessionId, {
-        type: 'smartTodoUpdate',
-        phase: 'executing',
-        todos,
-        iteration: 0,
-      });
-
-      // Build the plan text for subsequent prompts
-      const planText = this.formatPlanText(todos);
-
-      // ── Phase 2–3: Execute → Verify loop ─────────────────────────────
-      let iteration = 0;
-      const maxIter = this.sessionManager.getSmartTodo(sessionId)?.maxIterations ?? 5;
-
-      while (iteration < maxIter) {
-        // Check if aborted
-        if (!this.sessionManager.getSession(sessionId)) { break; }
-
-        // ── Execution pass ──────────────────────────────────────────────
-        const execPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_EXECUTION_PROMPT
-          .replace('{PLAN}', planText);
-
-        const pendingItems = todos.filter(t => t.status !== 'done').map(t => `- TODO ${t.id}: ${t.title}`).join('\n');
-        const execUserMsg = iteration === 0
-          ? `Please implement the plan now. Here is the original request:\n\n${userText}`
-          : `Some TODOs are still incomplete. Please fix the following items:\n\n${pendingItems}\n\nOriginal request: ${userText}`;
-
-        await this.sendOneLLMRound(sessionId, execUserMsg, undefined, execPrompt);
-
-        // ── Verification pass ───────────────────────────────────────────
-        this.sessionManager.setSmartTodoPhase(sessionId, 'verifying');
-        iteration = this.sessionManager.incrementVerifyIteration(sessionId);
-
-        this.postSessionMessage(sessionId, {
-          type: 'smartTodoUpdate',
-          phase: 'verifying',
-          todos: this.sessionManager.getSmartTodo(sessionId)?.todos ?? [],
-          iteration,
-        });
-
-        const verifyPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_VERIFY_PROMPT
-          .replace('{USER_REQUEST}', userText)
-          .replace('{PLAN}', planText);
-
-        const verifyResponse = await this.sendOneLLMRound(
-          sessionId,
-          `Verify the current state of all TODOs. This is verification iteration ${iteration}.`,
-          undefined,
-          verifyPrompt,
-        );
-
-        // Parse verification results and update todo statuses
-        this.parseVerificationResponse(sessionId, verifyResponse, todos);
-
-        this.postSessionMessage(sessionId, {
-          type: 'smartTodoUpdate',
-          phase: this.sessionManager.allTodosDone(sessionId) ? 'executing' : 'verifying',
-          todos: this.sessionManager.getSmartTodo(sessionId)?.todos ?? [],
-          iteration,
-        });
-
-        // Check completion
-        if (this.sessionManager.allTodosDone(sessionId)) {
-          this.postSessionMessage(sessionId, {
-            type: 'streamChunk',
-            content: `\n\n✅ **All TODOs verified complete after ${iteration} iteration(s).**\n`,
-          });
-          this.postSessionMessage(sessionId, { type: 'messageComplete' });
-          break;
-        }
-
-        // If max iterations reached, report and stop
-        if (this.sessionManager.hasReachedMaxIterations(sessionId)) {
-          const remaining = todos.filter(t => t.status !== 'done');
-          const summary = remaining.map(t => `- TODO ${t.id}: ${t.title} (${t.status})`).join('\n');
-          this.postSessionMessage(sessionId, {
-            type: 'streamChunk',
-            content: `\n\n⚠️ **Reached max iterations (${maxIter}).** Remaining items:\n${summary}\n`,
-          });
-          this.postSessionMessage(sessionId, { type: 'messageComplete' });
-          break;
-        }
-
-        // Loop back to execution
-        this.sessionManager.setSmartTodoPhase(sessionId, 'executing');
-      }
+      await this.executePlanLoop(sessionId, userText, todos, sandboxPreamble);
     } catch (err) {
       // Errors in individual rounds are already reported; this catches unexpected breaks
       if (!(err instanceof Error && err.message.includes('abort'))) {
@@ -634,6 +684,200 @@ Rules:
   }
 
   /**
+   * Resume planning after the user answered clarification questions.
+   */
+  private async resumePlanningWithAnswers(
+    sessionId: string,
+    userAnswers: string,
+    smartTodo: SmartTodoPlan,
+  ): Promise<void> {
+    const isSandboxed = this.modeManager.isSandboxedSmartTodoMode();
+    const sandboxPreamble = isSandboxed
+      ? `**SANDBOX MODE ACTIVE:** You are working inside a sandboxed environment with OS-level isolation. ` +
+        `Use runSandboxedCommand for isolated command execution. ` +
+        `Dangerous commands (sudo, pkill, killall, rm -rf /, etc.) are always blocked. ` +
+        `Create a sandbox with createSandbox for full git worktree + OS-level isolation if needed.\n\n`
+      : '';
+
+    // Notify the webview we're back to planning
+    this.postSessionMessage(sessionId, {
+      type: 'smartTodoUpdate',
+      phase: 'planning',
+      todos: [],
+      iteration: 0,
+    });
+
+    const combinedRequest = `Original request: ${smartTodo.userRequest}\n\nYour clarification questions:\n${smartTodo.clarificationQuestions}\n\nUser's answers:\n${userAnswers}\n\nNow produce the plan based on this information.`;
+
+    try {
+      const planningPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_PLANNING_PROMPT;
+      const planResponse = await this.sendPlanningRound(
+        sessionId,
+        planningPrompt,
+        combinedRequest,
+      );
+
+      // Check for another round of questions
+      const questions = this.extractClarificationQuestions(planResponse);
+      let todos = this.parseTodosFromPlan(planResponse);
+
+      if (todos.length === 0 && questions) {
+        // Still asking questions — pause again
+        this.sessionManager.setClarificationState(sessionId, questions, smartTodo.fileReferences);
+        this.postSessionMessage(sessionId, {
+          type: 'smartTodoUpdate',
+          phase: 'awaiting-clarification',
+          todos: [],
+          iteration: 0,
+        });
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        return;
+      }
+
+      // Fallback: force a plan
+      if (todos.length === 0) {
+        todos = [{ id: 1, title: 'Complete user request', status: 'pending' as TodoItemStatus, detail: smartTodo.userRequest }];
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: '\n\n\u26A0\uFE0F Could not extract structured TODOs. Using a single task for the full request.\n',
+        });
+      }
+
+      await this.executePlanLoop(sessionId, smartTodo.userRequest, todos, sandboxPreamble);
+    } catch (err) {
+      if (!(err instanceof Error && err.message.includes('abort'))) {
+        this.postSessionMessage(sessionId, {
+          type: 'error',
+          message: `Smart To-Do loop error: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }
+  }
+
+  /**
+   * Execute the plan loop (Phase 2–3): Execute → Verify, repeated until done.
+   */
+  private async executePlanLoop(
+    sessionId: string,
+    userText: string,
+    todos: TodoItem[],
+    sandboxPreamble: string,
+  ): Promise<void> {
+    this.sessionManager.setSmartTodoItems(sessionId, todos);
+    this.sessionManager.setSmartTodoPhase(sessionId, 'executing');
+
+    this.postSessionMessage(sessionId, {
+      type: 'smartTodoUpdate',
+      phase: 'executing',
+      todos,
+      iteration: 0,
+    });
+
+    // Build the plan text for subsequent prompts
+    const planText = this.formatPlanText(todos);
+
+    // ── Phase 2–3: Execute → Verify loop ─────────────────────────────
+    let iteration = 0;
+    const maxIter = this.sessionManager.getSmartTodo(sessionId)?.maxIterations ?? 5;
+
+    while (iteration < maxIter) {
+      // Check if aborted
+      if (!this.sessionManager.getSession(sessionId)) { break; }
+
+      // ── Execution pass ──────────────────────────────────────────────
+      const execPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_EXECUTION_PROMPT
+        .replace('{PLAN}', planText);
+
+      const pendingItems = todos.filter(t => t.status !== 'done').map(t => `- TODO ${t.id}: ${t.title}`).join('\n');
+      const execUserMsg = iteration === 0
+        ? `Please implement the plan now. Here is the original request:\n\n${userText}`
+        : `Some TODOs are still incomplete. Please fix the following items:\n\n${pendingItems}\n\nOriginal request: ${userText}`;
+
+      await this.sendOneLLMRound(sessionId, execUserMsg, undefined, execPrompt);
+
+      // ── Verification pass ───────────────────────────────────────────
+      this.sessionManager.setSmartTodoPhase(sessionId, 'verifying');
+      iteration = this.sessionManager.incrementVerifyIteration(sessionId);
+
+      this.postSessionMessage(sessionId, {
+        type: 'smartTodoUpdate',
+        phase: 'verifying',
+        todos: this.sessionManager.getSmartTodo(sessionId)?.todos ?? [],
+        iteration,
+      });
+
+      const verifyPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_VERIFY_PROMPT
+        .replace('{USER_REQUEST}', userText)
+        .replace('{PLAN}', planText);
+
+      const verifyResponse = await this.sendOneLLMRound(
+        sessionId,
+        `Verify the current state of all TODOs. This is verification iteration ${iteration}.`,
+        undefined,
+        verifyPrompt,
+      );
+
+      // Parse verification results and update todo statuses
+      this.parseVerificationResponse(sessionId, verifyResponse, todos);
+
+      this.postSessionMessage(sessionId, {
+        type: 'smartTodoUpdate',
+        phase: this.sessionManager.allTodosDone(sessionId) ? 'executing' : 'verifying',
+        todos: this.sessionManager.getSmartTodo(sessionId)?.todos ?? [],
+        iteration,
+      });
+
+      // Check completion
+      if (this.sessionManager.allTodosDone(sessionId)) {
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: `\n\n\u2705 **All TODOs verified complete after ${iteration} iteration(s).**\n`,
+        });
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        break;
+      }
+
+      // If max iterations reached, report and stop
+      if (this.sessionManager.hasReachedMaxIterations(sessionId)) {
+        const remaining = todos.filter(t => t.status !== 'done');
+        const summary = remaining.map(t => `- TODO ${t.id}: ${t.title} (${t.status})`).join('\n');
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: `\n\n\u26A0\uFE0F **Reached max iterations (${maxIter}).** Remaining items:\n${summary}\n`,
+        });
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        break;
+      }
+
+      // Loop back to execution
+      this.sessionManager.setSmartTodoPhase(sessionId, 'executing');
+    }
+  }
+
+  /**
+   * Extract clarification questions from LLM response.
+   * Returns the questions text if found, or null if no questions detected.
+   */
+  private extractClarificationQuestions(response: string): string | null {
+    // Strategy 1: explicit ```questions block
+    const questionsBlock = response.match(/```questions\s*\n([\s\S]*?)```/);
+    if (questionsBlock) {
+      return questionsBlock[1].trim();
+    }
+
+    // Strategy 2: response has multiple question marks and no plan block
+    const hasPlanBlock = /```plan\s*\n/.test(response);
+    if (hasPlanBlock) { return null; }
+
+    const questionLines = response.split('\n').filter(line => line.trim().endsWith('?'));
+    if (questionLines.length >= 2) {
+      return questionLines.map(l => l.trim()).join('\n');
+    }
+
+    return null;
+  }
+
+  /**
    * Parse a ```plan block into TodoItems.
    */
   private parseTodosFromPlan(response: string): TodoItem[] {
@@ -643,7 +887,7 @@ Rules:
     const planBlockMatch = response.match(/```plan\s*\n([\s\S]*?)```/);
     const text = planBlockMatch ? planBlockMatch[1] : response;
 
-    // Match lines like "TODO 1: Title — Description" or "TODO 1: Title - Description"
+    // Strategy 1: "TODO N: Title — Description"
     const todoRegex = /TODO\s*(\d+)\s*:\s*(.+)/gi;
     let match: RegExpExecArray | null;
     while ((match = todoRegex.exec(text)) !== null) {
@@ -656,7 +900,70 @@ Rules:
       todos.push({ id, title, status: 'pending', detail });
     }
 
+    if (todos.length > 0) { return todos; }
+
+    // Strategy 2: numbered list "1. Title" or "1) Title" — common LLM fallback
+    const numberedRegex = /^\s*(?:\*\*)?\s*(\d+)[.)\]]\s*(.+)/gm;
+    while ((match = numberedRegex.exec(text)) !== null) {
+      const id = parseInt(match[1], 10);
+      const fullText = match[2].replace(/\*\*/g, '').trim();
+      const dashIndex = fullText.search(/\s[—\-–:]\s/);
+      const title = dashIndex >= 0 ? fullText.slice(0, dashIndex).trim() : fullText;
+      const detail = dashIndex >= 0 ? fullText.slice(dashIndex).replace(/^[\s—\-–:]+/, '').trim() : undefined;
+
+      todos.push({ id, title: title.slice(0, 80), status: 'pending', detail });
+    }
+
+    if (todos.length > 0) { return todos; }
+
+    // Strategy 3: bullet list "- Title" or "* Title"
+    const bulletRegex = /^\s*[-*]\s+(.+)/gm;
+    let bulletId = 1;
+    while ((match = bulletRegex.exec(text)) !== null) {
+      const fullText = match[1].replace(/\*\*/g, '').trim();
+      if (fullText.length < 5) { continue; }  // skip trivial lines
+      const dashIndex = fullText.search(/\s[—\-–:]\s/);
+      const title = dashIndex >= 0 ? fullText.slice(0, dashIndex).trim() : fullText;
+      const detail = dashIndex >= 0 ? fullText.slice(dashIndex).replace(/^[\s—\-–:]+/, '').trim() : undefined;
+
+      todos.push({ id: bulletId++, title: title.slice(0, 80), status: 'pending', detail });
+    }
+
     return todos;
+  }
+
+  /**
+   * Validate that required tool parameters are present and of expected types.
+   * Returns an error message string if validation fails, or null if valid.
+   */
+  private validateToolParams(tool: Tool, args: Record<string, unknown>): string | null {
+    const schema = tool.definition.parameters as Record<string, unknown>;
+    const required = (schema.required ?? []) as string[];
+    const properties = (schema.properties ?? {}) as Record<string, { type?: string }>;
+
+    const missing: string[] = [];
+    const wrongType: string[] = [];
+
+    for (const param of required) {
+      const value = args[param];
+      if (value === undefined || value === null) {
+        missing.push(param);
+        continue;
+      }
+      const expectedType = properties[param]?.type;
+      if (expectedType && typeof value !== expectedType) {
+        wrongType.push(`${param} (expected ${expectedType}, got ${typeof value})`);
+      }
+    }
+
+    if (missing.length > 0 || wrongType.length > 0) {
+      const parts: string[] = [];
+      if (missing.length > 0) { parts.push(`Missing required parameters: ${missing.join(', ')}`); }
+      if (wrongType.length > 0) { parts.push(`Wrong parameter types: ${wrongType.join(', ')}`); }
+      return parts.join('. ');
+    }
+
+    return null;
   }
 
   /**

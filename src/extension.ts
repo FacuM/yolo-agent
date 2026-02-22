@@ -6,6 +6,7 @@ import { Tool } from './tools/types';
 import { ReadFileTool, WriteFileTool, ListFilesTool } from './tools/file-ops';
 import { RunTerminalTool } from './tools/terminal';
 import { GetDiagnosticsTool } from './tools/diagnostics';
+import { AskQuestionTool } from './tools/question';
 import {
   CreateSandboxTool,
   SwitchModeTool,
@@ -101,6 +102,7 @@ export async function activate(
     new ListFilesTool(),
     new RunTerminalTool(sandboxManager),
     new GetDiagnosticsTool(),
+    new AskQuestionTool(),
   ];
 
   // Add sandbox tools only if sandbox manager is available

@@ -478,6 +478,12 @@
       case 'toolCallResult':
         handleToolCallResult(message.id, message.name, message.content, message.isError);
         break;
+      case 'askQuestion':
+        handleAskQuestion(message.question, message.toolCallId);
+        break;
+      case 'questionAnswered':
+        handleQuestionAnswered();
+        break;
       case 'messageComplete':
         handleMessageComplete();
         break;
@@ -1165,6 +1171,12 @@
     sendBtn.disabled = true;
     stopBtn.disabled = false;
 
+    // If answering a pending question, don't create a new assistant bubble —
+    // the existing tool execution loop will continue producing output.
+    if (isAwaitingAnswer) {
+      return;
+    }
+
     currentAssistantEl = appendMessage('assistant', '');
     currentAssistantText = '';
     addStreamingCursor(currentAssistantEl);
@@ -1180,6 +1192,59 @@
     renderMessageContent(currentAssistantEl, currentAssistantText);
     addStreamingCursor(currentAssistantEl);
     scrollToBottom();
+  }
+
+  var isAwaitingAnswer = false;
+  var savedPlaceholder = '';
+
+  function handleAskQuestion(question, toolCallId) {
+    // Show a question card in the chat
+    const card = document.createElement('div');
+    card.className = 'question-card';
+    if (toolCallId) { card.dataset.toolId = toolCallId; }
+
+    const header = document.createElement('div');
+    header.className = 'question-card-header';
+
+    const icon = document.createElement('span');
+    icon.className = 'question-card-icon';
+    icon.textContent = '\u2753';
+
+    const label = document.createElement('span');
+    label.className = 'question-card-label';
+    label.textContent = 'Question from assistant';
+
+    header.appendChild(icon);
+    header.appendChild(label);
+
+    const body = document.createElement('div');
+    body.className = 'question-card-body';
+    body.textContent = question;
+
+    card.appendChild(header);
+    card.appendChild(body);
+    messagesEl.appendChild(card);
+
+    // Re-enable input so the user can answer
+    isAwaitingAnswer = true;
+    isStreaming = false;
+    savedPlaceholder = inputEl.placeholder;
+    inputEl.placeholder = 'Type your answer...';
+    sendBtn.disabled = false;
+    stopBtn.disabled = false;
+    apiSpinner.classList.add('hidden');
+    removeStreamingCursor();
+    inputEl.focus();
+    scrollToBottom();
+  }
+
+  function handleQuestionAnswered() {
+    // Restore streaming state — the tool loop continues
+    isAwaitingAnswer = false;
+    isStreaming = true;
+    inputEl.placeholder = savedPlaceholder || 'Ask YOLO Agent... (@ to reference files)';
+    sendBtn.disabled = true;
+    stopBtn.disabled = false;
   }
 
   function handleToolCallStarted(name, id) {

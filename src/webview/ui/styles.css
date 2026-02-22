@@ -241,6 +241,43 @@ body {
   display: block;
 }
 
+/* Question cards (askQuestion tool) */
+.question-card {
+  margin: 8px 0;
+  border: 1px solid var(--vscode-inputValidation-infoBorder, var(--vscode-panel-border));
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--vscode-textBlockQuote-background);
+}
+
+.question-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  font-size: 0.85em;
+  font-weight: 600;
+  color: var(--vscode-textLink-foreground);
+}
+
+.question-card-icon {
+  font-size: 1em;
+}
+
+.question-card-label {
+  opacity: 0.85;
+}
+
+.question-card-body {
+  padding: 10px 12px;
+  font-size: 0.92em;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--vscode-foreground);
+}
+
 /* Thinking blocks */
 .thinking-block {
   margin: 8px 0;

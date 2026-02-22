@@ -33,11 +33,15 @@ export interface SmartTodoPlan {
   /** Structured list of to-do items */
   todos: TodoItem[];
   /** Current phase: planning → executing → verifying (loops back to executing) */
-  phase: 'planning' | 'executing' | 'verifying';
+  phase: 'planning' | 'executing' | 'verifying' | 'awaiting-clarification';
   /** Number of verify iterations completed */
   verifyIterations: number;
   /** Max verify iterations before force-stopping */
   maxIterations: number;
+  /** File references from the original request (preserved across clarification rounds) */
+  fileReferences?: string[];
+  /** Clarification questions the LLM asked (shown to user) */
+  clarificationQuestions?: string;
 }
 
 export interface Session {
@@ -319,5 +323,19 @@ export class SessionManager {
     const plan = this.sessions.get(sessionId)?.smartTodo;
     if (!plan) { return true; }
     return plan.verifyIterations >= plan.maxIterations;
+  }
+
+  isAwaitingClarification(sessionId: string): boolean {
+    const plan = this.sessions.get(sessionId)?.smartTodo;
+    return plan?.phase === 'awaiting-clarification';
+  }
+
+  setClarificationState(sessionId: string, questions: string, fileReferences?: string[]): void {
+    const plan = this.sessions.get(sessionId)?.smartTodo;
+    if (!plan) { return; }
+    plan.phase = 'awaiting-clarification';
+    plan.clarificationQuestions = questions;
+    plan.fileReferences = fileReferences;
+    this.fireChange();
   }
 }
