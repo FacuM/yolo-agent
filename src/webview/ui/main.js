@@ -511,7 +511,7 @@
       case 'sessionResumed':
         // The switched-to session is still streaming — restore streaming UI state
         isStreaming = true;
-        sendBtn.disabled = true;
+        updateStreamingUI();
         stopBtn.disabled = false;
         currentAssistantEl = messagesEl.querySelector('.message.assistant:last-child');
         if (currentAssistantEl) {
@@ -997,6 +997,29 @@
     inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
   }
 
+  // Update send button and input area based on streaming state
+  function updateStreamingUI() {
+    if (isStreaming) {
+      sendBtn.disabled = false; // Always enabled — sends to queue when streaming
+      sendBtn.classList.add('queue-mode');
+      sendBtn.title = 'Add to queue';
+      inputEl.placeholder = 'Type to queue a message\u2026';
+      document.querySelectorAll('.steering-btn').forEach(btn => {
+        btn.classList.add('interrupt');
+        btn.title = 'Stop & ' + (btn.dataset.steer || 'steer');
+      });
+    } else {
+      sendBtn.classList.remove('queue-mode');
+      sendBtn.title = 'Send';
+      sendBtn.disabled = false;
+      inputEl.placeholder = 'Ask YOLO Agent... (@ to reference files)';
+      document.querySelectorAll('.steering-btn').forEach(btn => {
+        btn.classList.remove('interrupt');
+        btn.title = '';
+      });
+    }
+  }
+
   // Stop generation
   function stopGeneration() {
     vscode.postMessage({ type: 'cancelRequest' });
@@ -1005,7 +1028,7 @@
       abortController = null;
     }
     isStreaming = false;
-    sendBtn.disabled = false;
+    updateStreamingUI();
     stopBtn.disabled = true;
     apiSpinner.classList.add('hidden');
     removeStreamingCursor();
@@ -1013,18 +1036,22 @@
 
   // Handle steering commands
   function handleSteering(type) {
-    if (!currentAssistantText || isStreaming) {
-      // If no recent message or streaming, add to queue
-      addToQueue(type);
-      return;
-    }
-
     const steeringPrompts = {
       continue: 'Please continue from where you left off.',
       retry: 'Please try again with a different approach.',
       summarize: 'Please summarize what we\'ve covered so far.',
       expand: 'Please expand on your last response with more detail.',
     };
+
+    if (isStreaming) {
+      // Interrupt: stop current generation, queue the steering command.
+      // The messageComplete handler will fire processQueue() once the backend is idle.
+      stopGeneration();
+      addToQueue(type);
+      // Fallback: if messageComplete doesn't fire within 600ms (edge case), try processing
+      setTimeout(() => processQueue(), 600);
+      return;
+    }
 
     const prompt = steeringPrompts[type] || type;
     sendMessageWithPrompt(prompt);
@@ -1041,7 +1068,7 @@
 
     inputEl.value = '';
     isStreaming = true;
-    sendBtn.disabled = true;
+    updateStreamingUI();
     stopBtn.disabled = false;
 
     currentAssistantEl = appendMessage('assistant', '');
@@ -1050,7 +1077,7 @@
   }
 
   // Queue management
-  function addToQueue(type) {
+  function addToQueue(typeOrItem) {
     const steeringNames = {
       continue: 'Continue',
       retry: 'Retry',
@@ -1058,12 +1085,26 @@
       expand: 'Expand',
     };
 
-    commandQueue.push({
-      type,
-      name: steeringNames[type] || type,
-      timestamp: Date.now(),
-    });
+    let item;
+    if (typeof typeOrItem === 'object' && typeOrItem.type === 'custom') {
+      // Custom text message from the user
+      item = {
+        type: 'custom',
+        name: typeOrItem.text.length > 40 ? typeOrItem.text.substring(0, 40) + '\u2026' : typeOrItem.text,
+        text: typeOrItem.text,
+        timestamp: Date.now(),
+      };
+    } else {
+      // Steering type (string)
+      const type = typeof typeOrItem === 'string' ? typeOrItem : typeOrItem.type;
+      item = {
+        type,
+        name: steeringNames[type] || type,
+        timestamp: Date.now(),
+      };
+    }
 
+    commandQueue.push(item);
     renderQueue();
   }
 
@@ -1085,11 +1126,19 @@
     for (let i = 0; i < commandQueue.length; i++) {
       const item = commandQueue[i];
       const el = document.createElement('div');
-      el.className = 'queue-item';
+      el.className = 'queue-item' + (item.type === 'custom' ? ' custom' : '');
+
+      const icon = document.createElement('span');
+      icon.className = 'queue-item-icon';
+      icon.textContent = item.type === 'custom' ? '\u{1F4AC}' : '\u2192';
+      el.appendChild(icon);
 
       const name = document.createElement('span');
       name.className = 'queue-item-name';
       name.textContent = item.name;
+      if (item.type === 'custom' && item.text) {
+        name.title = item.text; // Full text on hover
+      }
 
       const removeBtn = document.createElement('button');
       removeBtn.className = 'queue-item-remove';
@@ -1108,7 +1157,20 @@
 
     const next = commandQueue.shift();
     renderQueue();
-    handleSteering(next.type);
+
+    if (next.type === 'custom') {
+      // Custom text — send as a normal user message
+      sendMessageWithPrompt(next.text);
+    } else {
+      // Steering command — resolve to prompt and send directly
+      const steeringPrompts = {
+        continue: 'Please continue from where you left off.',
+        retry: 'Please try again with a different approach.',
+        summarize: 'Please summarize what we\'ve covered so far.',
+        expand: 'Please expand on your last response with more detail.',
+      };
+      sendMessageWithPrompt(steeringPrompts[next.type] || next.type);
+    }
   }
 
   // ===== File Reference Autocomplete =====
@@ -1267,7 +1329,15 @@
 
   function sendMessage() {
     const text = inputEl.value.trim();
-    if (!text || isStreaming) { return; }
+    if (!text) { return; }
+
+    // If streaming, queue the message instead of blocking
+    if (isStreaming) {
+      addToQueue({ type: 'custom', text });
+      inputEl.value = '';
+      inputEl.style.height = 'auto';
+      return;
+    }
 
     removeEmptyState();
     appendMessage('user', text);
@@ -1290,7 +1360,7 @@
 
     inputEl.value = '';
     isStreaming = true;
-    sendBtn.disabled = true;
+    updateStreamingUI();
     stopBtn.disabled = false;
 
     // If answering a pending question, don't create a new assistant bubble —
@@ -1352,7 +1422,7 @@
     isStreaming = false;
     savedPlaceholder = inputEl.placeholder;
     inputEl.placeholder = 'Type your answer...';
-    sendBtn.disabled = false;
+    updateStreamingUI();
     stopBtn.disabled = false;
     apiSpinner.classList.add('hidden');
     removeStreamingCursor();
@@ -1365,11 +1435,21 @@
     isAwaitingAnswer = false;
     isStreaming = true;
     inputEl.placeholder = savedPlaceholder || 'Ask YOLO Agent... (@ to reference files)';
-    sendBtn.disabled = true;
+    updateStreamingUI();
     stopBtn.disabled = false;
   }
 
-  function handleToolCallStarted(name, id) {
+  function formatToolArgs(args) {
+    if (!args || typeof args !== 'object') { return ''; }
+    const entries = Object.entries(args);
+    if (entries.length === 0) { return ''; }
+    return entries.map(([k, v]) => {
+      const val = typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+      return k + ': ' + val;
+    }).join('\n');
+  }
+
+  function handleToolCallStarted(name, id, args) {
     const card = document.createElement('div');
     card.className = 'tool-call';
     card.dataset.toolId = id;
@@ -1405,7 +1485,32 @@
 
     const contentEl = document.createElement('div');
     contentEl.className = 'tool-call-content';
-    contentEl.textContent = 'Executing...';
+
+    // Input section — show tool arguments
+    const inputSection = document.createElement('div');
+    inputSection.className = 'tool-call-section tool-call-input';
+    const inputLabel = document.createElement('div');
+    inputLabel.className = 'tool-call-section-label';
+    inputLabel.textContent = 'Input';
+    const inputBody = document.createElement('pre');
+    inputBody.className = 'tool-call-section-body';
+    inputBody.textContent = formatToolArgs(args) || '(no arguments)';
+    inputSection.appendChild(inputLabel);
+    inputSection.appendChild(inputBody);
+    contentEl.appendChild(inputSection);
+
+    // Output section — placeholder until result arrives
+    const outputSection = document.createElement('div');
+    outputSection.className = 'tool-call-section tool-call-output';
+    const outputLabel = document.createElement('div');
+    outputLabel.className = 'tool-call-section-label';
+    outputLabel.textContent = 'Output';
+    const outputBody = document.createElement('pre');
+    outputBody.className = 'tool-call-section-body';
+    outputBody.textContent = 'Executing\u2026';
+    outputSection.appendChild(outputLabel);
+    outputSection.appendChild(outputBody);
+    contentEl.appendChild(outputSection);
 
     card.appendChild(header);
     card.appendChild(contentEl);
@@ -1455,10 +1560,6 @@
       if (outputBody) {
         outputBody.textContent = content;
         if (isError) { outputBody.classList.add('error'); }
-      } else {
-        // Fallback: old-style content element
-        const contentEl = card.querySelector('.tool-call-content');
-        if (contentEl) { contentEl.textContent = content; }
       }
     }
     scrollToBottom();
@@ -1517,7 +1618,7 @@
 
   function handleMessageComplete() {
     isStreaming = false;
-    sendBtn.disabled = false;
+    updateStreamingUI();
     stopBtn.disabled = true;
     apiSpinner.classList.add('hidden');
     removeStreamingCursor();
@@ -1532,7 +1633,7 @@
 
   function handleError(msg) {
     isStreaming = false;
-    sendBtn.disabled = false;
+    updateStreamingUI();
     stopBtn.disabled = true;
     apiSpinner.classList.add('hidden');
     removeStreamingCursor();
