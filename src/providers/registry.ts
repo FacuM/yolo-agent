@@ -11,6 +11,7 @@ export class ProviderRegistry {
   private providers = new Map<string, LLMProvider>();
   private profileManager: ProfileManager;
   private activeProviderId: string | null = null;
+  private activeModelOverride: string | null = null;
 
   private readonly _onDidChangeProviders = new vscode.EventEmitter<void>();
   readonly onDidChangeProviders = this._onDidChangeProviders.event;
@@ -98,9 +99,15 @@ export class ProviderRegistry {
   }
 
   getActiveModelId(): string {
+    if (this.activeModelOverride) { return this.activeModelOverride; }
     if (!this.activeProviderId) { return ''; }
     const profile = this.profileManager.getProfile(this.activeProviderId);
     return profile?.modelId ?? '';
+  }
+
+  setActiveModelId(modelId: string): void {
+    this.activeModelOverride = modelId;
+    this._onDidChangeProviders.fire();
   }
 
   setActiveProvider(id: string): void {
@@ -108,6 +115,7 @@ export class ProviderRegistry {
       throw new Error(`Provider "${id}" not found`);
     }
     this.activeProviderId = id;
+    this.activeModelOverride = null;
     this._onDidChangeProviders.fire();
   }
 

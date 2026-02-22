@@ -102,7 +102,8 @@ body {
 
 /* Header controls */
 #mode-select,
-#provider-select {
+#provider-select,
+#model-select {
   padding: 4px 8px;
   background: var(--vscode-dropdown-background);
   color: var(--vscode-dropdown-foreground);
@@ -119,6 +120,12 @@ body {
 #provider-select {
   flex: 0 1 auto;
   max-width: 110px;
+}
+
+#model-select {
+  flex: 1;
+  max-width: 160px;
+  text-overflow: ellipsis;
 }
 
 #new-chat-btn,

@@ -39,6 +39,7 @@
   const stopBtn = /** @type {HTMLButtonElement} */ (document.getElementById('stop-btn'));
   const modeSelect = /** @type {HTMLSelectElement} */ (document.getElementById('mode-select'));
   const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById('provider-select'));
+  const modelSelect = /** @type {HTMLSelectElement} */ (document.getElementById('model-select'));
   const newChatBtn = document.getElementById('new-chat-btn');
   const contextBtn = document.getElementById('context-btn');
   const settingsBtn = document.getElementById('settings-btn');
@@ -185,6 +186,10 @@
 
   providerSelect.addEventListener('change', () => {
     vscode.postMessage({ type: 'switchProvider', providerId: providerSelect.value });
+  });
+
+  modelSelect.addEventListener('change', () => {
+    vscode.postMessage({ type: 'switchModel', modelId: modelSelect.value });
   });
 
   modeSelect.addEventListener('change', () => {
@@ -423,6 +428,13 @@
       // Chat messages
       case 'providers':
         updateProviderList(message.providers, message.activeProviderId);
+        // Request models for the active provider
+        if (message.activeProviderId) {
+          vscode.postMessage({ type: 'getModelsForActiveProvider' });
+        }
+        break;
+      case 'models':
+        updateModelList(message.models, message.activeModelId);
         break;
       case 'modes':
         modes = message.modes;
@@ -1245,6 +1257,12 @@
       opt.value = '';
       opt.textContent = 'No providers - click \u2699 to add';
       providerSelect.appendChild(opt);
+      // Clear model select too
+      modelSelect.textContent = '';
+      const mopt = document.createElement('option');
+      mopt.value = '';
+      mopt.textContent = 'No model';
+      modelSelect.appendChild(mopt);
       return;
     }
     for (const p of providers) {
@@ -1253,6 +1271,33 @@
       opt.textContent = p.name;
       if (p.id === activeId) { opt.selected = true; }
       providerSelect.appendChild(opt);
+    }
+  }
+
+  function updateModelList(models, activeModelId) {
+    modelSelect.textContent = '';
+    if (!models || models.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = activeModelId || '';
+      opt.textContent = activeModelId || 'No models';
+      modelSelect.appendChild(opt);
+      return;
+    }
+    // If active model not in list, add it first
+    const modelIds = models.map(m => m.id);
+    if (activeModelId && !modelIds.includes(activeModelId)) {
+      const opt = document.createElement('option');
+      opt.value = activeModelId;
+      opt.textContent = activeModelId;
+      opt.selected = true;
+      modelSelect.appendChild(opt);
+    }
+    for (const m of models) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name || m.id;
+      if (m.id === activeModelId) { opt.selected = true; }
+      modelSelect.appendChild(opt);
     }
   }
 

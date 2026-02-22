@@ -68,12 +68,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           break;
         case 'switchProvider':
           this.registry.setActiveProvider(message.providerId);
+          await this.sendModelListForActiveProvider();
+          break;
+        case 'switchModel':
+          this.registry.setActiveModelId(message.modelId);
           break;
         case 'getProviders':
           this.sendProviderList();
           break;
         case 'getModels':
           await this.sendModelList(message.providerId);
+          break;
+        case 'getModelsForActiveProvider':
+          await this.sendModelListForActiveProvider();
           break;
         case 'cancelRequest':
           if (this.abortController) {
@@ -567,12 +574,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       type: 'providers',
       providers: this.registry.getAllProviders(),
       activeProviderId: this.registry.getActiveProviderId(),
+      activeModelId: this.registry.getActiveModelId(),
     });
   }
 
   private async sendModelList(providerId: string): Promise<void> {
     const models = await this.registry.getModelsForProvider(providerId);
     this.postMessage({ type: 'models', models });
+  }
+
+  private async sendModelListForActiveProvider(): Promise<void> {
+    const activeId = this.registry.getActiveProviderId();
+    if (!activeId) { return; }
+    const models = await this.registry.getModelsForProvider(activeId);
+    this.postMessage({
+      type: 'models',
+      models,
+      activeModelId: this.registry.getActiveModelId(),
+    });
   }
 
   private postMessage(message: unknown): void {
@@ -608,6 +627,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           <select id="mode-select" title="Select mode"></select>
           <select id="provider-select" title="Select provider">
             <option value="">No providers</option>
+          </select>
+          <select id="model-select" title="Select model">
+            <option value="">No model</option>
           </select>
           <button id="new-chat-btn" title="New chat">\u2795</button>
           <button id="context-btn" title="Context">\u{1F4D6}</button>
