@@ -871,6 +871,7 @@
 
   // Stop generation
   function stopGeneration() {
+    vscode.postMessage({ type: 'cancelRequest' });
     if (abortController) {
       abortController.abort();
       abortController = null;
@@ -878,6 +879,7 @@
     isStreaming = false;
     sendBtn.disabled = false;
     stopBtn.disabled = true;
+    apiSpinner.classList.add('hidden');
     removeStreamingCursor();
   }
 
