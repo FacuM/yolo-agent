@@ -242,14 +242,19 @@ export class GetSandboxStatusTool implements Tool {
 
     if (!info.isActive) {
       return {
-        content: 'Not currently in a sandbox environment.',
+        content: `Sandbox Environment: Not created
+- Software-level command restrictions: ✓ Active (dangerous commands like sudo, pkill, killall, rm -rf /, etc. are blocked)
+- OS-level isolation: ✗ Not active (use createSandbox to enable)
+- Git worktree isolation: ✗ Not active (use createSandbox to enable)
+
+Note: Even without a full sandbox environment, dangerous commands are blocked when in sandbox mode. Use createSandbox to additionally get OS-level process isolation and a dedicated git worktree/branch.`,
       };
     }
 
     return {
-      content: `Sandbox Status:
-- Active: Yes
+      content: `Sandbox Environment: Active
 - OS-level isolation: ${info.osLevelIsolation ? '✓ Yes (bubblewrap)' : '✗ No (software-level only)'}
+- Software-level command restrictions: ✓ Active
 - Branch: ${info.config?.branchName}
 - Worktree Path: ${info.config?.worktreePath}
 - Original Path: ${info.config?.originalPath}`,

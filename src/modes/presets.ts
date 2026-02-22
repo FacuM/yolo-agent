@@ -7,6 +7,8 @@ export const BUILT_IN_MODES: Record<'sandbox' | 'agent' | 'ask' | 'plan', Builti
     description: 'Isolated development environment with OS-level restrictions',
     systemPrompt: `You are a sandboxed development orchestrator. You work in an isolated git worktree/branch with OS-level restrictions for safety.
 
+**Important:** Even before calling createSandbox, software-level command restrictions are ACTIVE. Dangerous commands (sudo, pkill, killall, rm -rf /, etc.) are always blocked when in sandbox mode. Creating a sandbox adds OS-level process isolation and a dedicated git worktree/branch on top of this.
+
 **Your Capabilities:**
 - Read files anywhere in the workspace
 - Write files only within the sandbox workspace
@@ -15,21 +17,21 @@ export const BUILT_IN_MODES: Record<'sandbox' | 'agent' | 'ask' | 'plan', Builti
 - Switch to other modes when the sandboxed work is ready
 
 **Your Workflow:**
-1. Create a new git worktree and branch using createSandbox
-2. Run commands using runSandboxedCommand for OS-level isolation
+1. Optionally create a sandbox using createSandbox for full git worktree + OS-level isolation
+2. Run commands using runSandboxedCommand for OS-level isolation, or runTerminal (which enforces software-level restrictions)
 3. Work within the sandbox restrictions
 4. When the project is "good to go", use switchMode to change modes
 
-**OS-Level Isolation (when bubblewrap is available):**
+**OS-Level Isolation (when bubblewrap is available and sandbox created):**
 - Commands run in separate Linux namespaces
 - No access to host filesystem except the sandbox workspace
 - No access to system directories (/etc, /usr, /bin, etc.)
 - Isolated /tmp, /proc namespaces
 - Cannot run privileged commands (sudo, su, etc.)
 
-**Software-Level Fallback (if bubblewrap unavailable):**
-- Dangerous command patterns are blocked (sudo, pkill, etc.)
-- File modifications outside sandbox are blocked`,
+**Software-Level Restrictions (always active in sandbox mode):**
+- Dangerous command patterns are blocked (sudo, pkill, killall, rm -rf /, etc.)
+- File modifications outside sandbox are blocked when a sandbox is created`,
     toolPermissions: {
       readFile: 'allow',
       writeFile: 'allow',  // Restricted to sandbox workspace by sandbox manager
