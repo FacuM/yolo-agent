@@ -4,6 +4,14 @@
   // @ts-ignore
   const vscode = acquireVsCodeApi();
 
+  // Constants
+  const ICON_PLAY = '\u25B6';  // ▶ Play/expand icon
+  const STATUS_RUNNING = 'running...';
+  const STATUS_ERROR = 'error';
+  const STATUS_DONE = 'done';
+  const STATUS_OPACITY = '0.6';
+  const HANDLER_PROPERTY = '_yoloAgent_toggleHandler';
+
   // ===== View Router =====
   const chatView = document.getElementById('chat-view');
   const settingsView = document.getElementById('settings-view');
@@ -418,14 +426,14 @@
 
     const icon = document.createElement('span');
     icon.className = 'icon';
-    icon.textContent = '\u25B6';
+    icon.textContent = ICON_PLAY;
 
     const nameEl = document.createElement('strong');
     nameEl.textContent = name;
 
     const status = document.createElement('span');
-    status.style.opacity = '0.6';
-    status.textContent = 'running...';
+    status.style.opacity = STATUS_OPACITY;
+    status.textContent = STATUS_RUNNING;
 
     header.appendChild(icon);
     header.appendChild(document.createTextNode(' '));
@@ -433,11 +441,14 @@
     header.appendChild(document.createTextNode(' '));
     header.appendChild(status);
 
-    header.addEventListener('click', () => {
+    // Store the handler on the header element for later removal
+    const toggleHandler = () => {
       header.classList.toggle('expanded');
       const contentEl = card.querySelector('.tool-call-content');
       if (contentEl) { contentEl.classList.toggle('visible'); }
-    });
+    };
+    header[HANDLER_PROPERTY] = toggleHandler;
+    header.addEventListener('click', toggleHandler);
 
     const contentEl = document.createElement('div');
     contentEl.className = 'tool-call-content';
@@ -454,17 +465,22 @@
     if (card) {
       const header = card.querySelector('.tool-call-header');
       if (header) {
+        // Remove old listener if it exists
+        if (header[HANDLER_PROPERTY]) {
+          header.removeEventListener('click', header[HANDLER_PROPERTY]);
+        }
+
         header.textContent = '';
         const icon = document.createElement('span');
         icon.className = 'icon';
-        icon.textContent = '\u25B6';
+        icon.textContent = ICON_PLAY;
 
         const nameEl = document.createElement('strong');
         nameEl.textContent = name;
 
         const statusEl = document.createElement('span');
-        statusEl.style.opacity = '0.6';
-        statusEl.textContent = isError ? 'error' : 'done';
+        statusEl.style.opacity = STATUS_OPACITY;
+        statusEl.textContent = isError ? STATUS_ERROR : STATUS_DONE;
 
         header.appendChild(icon);
         header.appendChild(document.createTextNode(' '));
@@ -472,11 +488,14 @@
         header.appendChild(document.createTextNode(' '));
         header.appendChild(statusEl);
 
-        header.addEventListener('click', () => {
+        // Add new listener
+        const toggleHandler = () => {
           header.classList.toggle('expanded');
-          const c = card.querySelector('.tool-call-content');
-          if (c) { c.classList.toggle('visible'); }
-        });
+          const contentEl = card.querySelector('.tool-call-content');
+          if (contentEl) { contentEl.classList.toggle('visible'); }
+        };
+        header[HANDLER_PROPERTY] = toggleHandler;
+        header.addEventListener('click', toggleHandler);
       }
       const contentEl = card.querySelector('.tool-call-content');
       if (contentEl) {
