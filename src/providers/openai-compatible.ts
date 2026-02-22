@@ -70,8 +70,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
       if (!delta) {continue;}
 
       // Capture reasoning_content from o-series models
-      if (delta.reasoning_content) {
-        reasoningContent += delta.reasoning_content;
+      const reasoning = (delta as { reasoning_content?: string }).reasoning_content;
+      if (reasoning) {
+        reasoningContent += reasoning;
       }
 
       if (delta.content) {

@@ -4,6 +4,7 @@ import { ProfileManager } from '../providers/profile-manager';
 import { Tool } from '../tools/types';
 import { ModeManager } from '../modes/manager';
 import { ModeId } from '../modes/types';
+import { ContextManager } from '../context/manager';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'yoloAgent.chatView';
@@ -14,20 +15,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private modeManager: ModeManager;
   private tools: Map<string, Tool>;
   private extensionUri: vscode.Uri;
-  private conversationHistory: { role: string; content: string }[] = [];
+  private conversationHistory: { role: 'user' | 'assistant'; content: string }[] = [];
+  private contextManager: ContextManager;
 
   constructor(
     extensionUri: vscode.Uri,
     registry: ProviderRegistry,
     profileManager: ProfileManager,
     modeManager: ModeManager,
-    tools: Map<string, Tool>
+    tools: Map<string, Tool>,
+    contextManager: ContextManager
   ) {
     this.extensionUri = extensionUri;
     this.registry = registry;
     this.profileManager = profileManager;
     this.modeManager = modeManager;
     this.tools = tools;
+    this.contextManager = contextManager;
   }
 
   resolveWebviewView(
@@ -94,12 +98,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'getModelsForProfile':
           await this.handleGetModelsForProfile(message);
           break;
+
+        // Context messages
+        case 'getContext':
+          this.handleGetContext();
+          break;
+        case 'setSkillEnabled':
+          this.handleSetSkillEnabled(message.sourcePath, message.enabled);
+          break;
       }
     });
 
     // Send initial data
     this.sendProviderList();
     this.handleGetModes();
+    this.handleGetContext();
 
     // Re-send provider list when profiles change
     this.profileManager.onDidChangeProfiles(() => {
@@ -125,7 +138,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const allowedTools = allowedToolNames.map(name => this.tools.get(name)!.definition);
 
     // Add mode system prompt
-    const modePrompt = this.modeManager.getSystemPrompt();
+    let modePrompt = this.modeManager.getSystemPrompt();
+
+    // Add context from skills and AGENTS.md
+    const contextAddition = this.contextManager.getSystemPromptAddition();
+    if (contextAddition) {
+      modePrompt += '\n\n' + contextAddition;
+    }
 
     const userMessage = { role: 'user' as const, content: text };
     const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
@@ -300,6 +319,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  // --- Context handlers ---
+
+  private handleGetContext() {
+    const context = this.contextManager.getContextInjection();
+    this.postMessage({
+      type: 'context',
+      skills: context.skills,
+      agentsMd: context.agentsMd,
+    });
+  }
+
+  private handleSetSkillEnabled(sourcePath: string, enabled: boolean) {
+    this.contextManager.setSkillEnabled(sourcePath, enabled);
+    // Re-send the updated context
+    this.handleGetContext();
+  }
+
   // --- Helpers ---
 
   private sendProviderList(): void {
@@ -348,6 +384,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           <option value="">No providers</option>
         </select>
         <button id="new-chat-btn" title="New chat">+</button>
+        <button id="context-btn" title="Context">\u{1F4D6}</button>
         <button id="settings-btn" title="Settings">\u2699</button>
       </div>
       <div id="messages"></div>
@@ -420,6 +457,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         </div>
         <div id="delete-profile-area" class="hidden">
           <button id="delete-profile-btn" class="danger-btn">Delete Provider</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Context View -->
+    <div id="context-view" class="hidden">
+      <div id="context-header">
+        <button id="context-back-btn" title="Back to chat">\u2190</button>
+        <span class="header-title">Context</span>
+      </div>
+      <div id="context-content">
+        <div id="context-skills-section">
+          <h3>Skills</h3>
+          <div id="context-skills-list"></div>
+        </div>
+        <div id="context-agents-section">
+          <h3>AGENTS.md Files</h3>
+          <div id="context-agents-list"></div>
         </div>
       </div>
     </div>

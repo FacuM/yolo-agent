@@ -59,6 +59,7 @@ body {
 }
 
 #new-chat-btn,
+#context-btn,
 #settings-btn {
   padding: 4px 10px;
   background: var(--vscode-button-secondaryBackground);
@@ -71,6 +72,7 @@ body {
 }
 
 #new-chat-btn:hover,
+#context-btn:hover,
 #settings-btn:hover {
   background: var(--vscode-button-secondaryHoverBackground);
 }
@@ -306,14 +308,16 @@ body {
 
 /* ===== Settings & Editor Views ===== */
 #settings-view,
-#editor-view {
+#editor-view,
+#context-view {
   display: flex;
   flex-direction: column;
   height: 100vh;
 }
 
 #settings-header,
-#editor-header {
+#editor-header,
+#context-header {
   display: flex;
   gap: 8px;
   padding: 8px;
@@ -322,7 +326,8 @@ body {
 }
 
 #settings-header button,
-#editor-header button {
+#editor-header button,
+#context-header button {
   background: none;
   border: none;
   color: var(--vscode-foreground);
@@ -333,7 +338,8 @@ body {
 }
 
 #settings-header button:hover,
-#editor-header button:hover {
+#editor-header button:hover,
+#context-header button:hover {
   background: var(--vscode-button-secondaryHoverBackground);
 }
 
@@ -343,10 +349,89 @@ body {
 }
 
 #settings-content,
-#editor-content {
+#editor-content,
+#context-content {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+}
+
+/* ===== Context View ===== */
+#context-content h3 {
+  font-size: 1em;
+  font-weight: 600;
+  margin: 12px 0 8px 0;
+  opacity: 0.8;
+}
+
+#context-skills-section,
+#context-agents-section {
+  margin-bottom: 16px;
+}
+
+.context-card {
+  padding: 10px 12px;
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.context-card.disabled {
+  opacity: 0.6;
+}
+
+.context-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.context-name {
+  font-weight: 600;
+  flex: 1;
+}
+
+.context-path {
+  font-size: 0.85em;
+  opacity: 0.6;
+  font-family: var(--vscode-editor-font-family);
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.context-description {
+  font-size: 0.9em;
+  margin-bottom: 6px;
+}
+
+.context-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.context-tag {
+  font-size: 0.75em;
+  padding: 2px 6px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 3px;
+}
+
+.context-preview {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.85em;
+  padding: 8px;
+  margin-top: 6px;
+  background: var(--vscode-textCodeBlock-background);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  opacity: 0.8;
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 /* Profile Cards */

@@ -7,6 +7,7 @@ import { ReadFileTool, WriteFileTool, ListFilesTool } from './tools/file-ops';
 import { RunTerminalTool } from './tools/terminal';
 import { GetDiagnosticsTool } from './tools/diagnostics';
 import { ModeManager } from './modes/manager';
+import { ContextManager } from './context/manager';
 
 let profileManager: ProfileManager;
 let registry: ProviderRegistry;
@@ -22,6 +23,10 @@ export async function activate(
   // Initialize mode manager
   const modeManager = new ModeManager(context);
   await modeManager.initialize();
+
+  // Initialize context manager
+  const contextManager = new ContextManager();
+  await contextManager.initialize();
 
   // Initialize tools
   const tools = new Map<string, Tool>();
@@ -42,7 +47,8 @@ export async function activate(
     registry,
     profileManager,
     modeManager,
-    tools
+    tools,
+    contextManager
   );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -93,7 +99,8 @@ export async function activate(
   context.subscriptions.push(
     { dispose: () => profileManager.dispose() },
     { dispose: () => registry.dispose() },
-    { dispose: () => modeManager.dispose() }
+    { dispose: () => modeManager.dispose() },
+    { dispose: () => contextManager.dispose() }
   );
 }
 

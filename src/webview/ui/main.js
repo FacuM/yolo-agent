@@ -16,14 +16,16 @@
   const chatView = document.getElementById('chat-view');
   const settingsView = document.getElementById('settings-view');
   const editorView = document.getElementById('editor-view');
+  const contextView = document.getElementById('context-view');
 
-  let currentView = 'chat'; // 'chat' | 'settings' | 'editor'
+  let currentView = 'chat'; // 'chat' | 'settings' | 'editor' | 'context'
 
   function showView(view) {
     currentView = view;
     chatView.classList.toggle('hidden', view !== 'chat');
     settingsView.classList.toggle('hidden', view !== 'settings');
     editorView.classList.toggle('hidden', view !== 'editor');
+    contextView.classList.toggle('hidden', view !== 'context');
   }
 
   // ===== Chat View Elements =====
@@ -33,12 +35,18 @@
   const modeSelect = /** @type {HTMLSelectElement} */ (document.getElementById('mode-select'));
   const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById('provider-select'));
   const newChatBtn = document.getElementById('new-chat-btn');
+  const contextBtn = document.getElementById('context-btn');
   const settingsBtn = document.getElementById('settings-btn');
 
   // ===== Settings View Elements =====
   const settingsBackBtn = document.getElementById('settings-back-btn');
   const profilesList = document.getElementById('profiles-list');
   const addProfileBtn = document.getElementById('add-profile-btn');
+
+  // ===== Context View Elements =====
+  const contextBackBtn = document.getElementById('context-back-btn');
+  const contextSkillsList = document.getElementById('context-skills-list');
+  const contextAgentsList = document.getElementById('context-agents-list');
 
   // ===== Editor View Elements =====
   const editorBackBtn = document.getElementById('editor-back-btn');
@@ -64,6 +72,8 @@
   let profiles = [];
   let modes = [];
   let currentModeId = 'agent';
+  let contextSkills = [];
+  let contextAgentsMd = [];
 
   const DEFAULT_BASE_URLS = {
     anthropic: 'https://api.anthropic.com',
@@ -75,6 +85,7 @@
   showEmptyState();
   vscode.postMessage({ type: 'getProviders' });
   vscode.postMessage({ type: 'getModes' });
+  vscode.postMessage({ type: 'getContext' });
 
   // ===== Chat Event Listeners =====
   sendBtn.addEventListener('click', sendMessage);
@@ -103,8 +114,18 @@
     vscode.postMessage({ type: 'getProfiles' });
   });
 
+  contextBtn.addEventListener('click', () => {
+    showView('context');
+    vscode.postMessage({ type: 'getContext' });
+  });
+
   // ===== Settings Event Listeners =====
   settingsBackBtn.addEventListener('click', () => {
+    showView('chat');
+  });
+
+  // ===== Context Event Listeners =====
+  contextBackBtn.addEventListener('click', () => {
     showView('chat');
   });
 
@@ -256,6 +277,13 @@
         break;
       case 'modelsForProfile':
         renderModelOptions(message.models);
+        break;
+
+      // Context messages
+      case 'context':
+        contextSkills = message.skills || [];
+        contextAgentsMd = message.agentsMd || [];
+        renderContextPanel();
         break;
     }
   });
@@ -739,5 +767,118 @@
 
   function scrollToBottom() {
     messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // ===== Context Functions =====
+
+  function renderContextPanel() {
+    renderSkillsList();
+    renderAgentsList();
+  }
+
+  function renderSkillsList() {
+    contextSkillsList.textContent = '';
+
+    if (contextSkills.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'settings-empty';
+      empty.textContent = 'No skills found in .yolo-agent/skills/';
+      contextSkillsList.appendChild(empty);
+      return;
+    }
+
+    for (const skill of contextSkills) {
+      const card = document.createElement('div');
+      card.className = 'context-card' + (skill.enabled ? ' enabled' : ' disabled');
+
+      const header = document.createElement('div');
+      header.className = 'context-card-header';
+
+      const toggle = document.createElement('input');
+      toggle.type = 'checkbox';
+      toggle.checked = skill.enabled;
+      toggle.addEventListener('change', () => {
+        vscode.postMessage({
+          type: 'setSkillEnabled',
+          sourcePath: skill.sourcePath,
+          enabled: toggle.checked,
+        });
+      });
+
+      const name = document.createElement('strong');
+      name.className = 'context-name';
+      name.textContent = skill.name;
+
+      const path = document.createElement('div');
+      path.className = 'context-path';
+      path.textContent = skill.sourcePath;
+
+      const desc = document.createElement('div');
+      desc.className = 'context-description';
+      desc.textContent = skill.description || 'No description';
+
+      header.appendChild(toggle);
+      header.appendChild(name);
+
+      card.appendChild(header);
+      card.appendChild(path);
+      card.appendChild(desc);
+
+      if (skill.tags && skill.tags.length > 0) {
+        const tagsEl = document.createElement('div');
+        tagsEl.className = 'context-tags';
+        for (const tag of skill.tags) {
+          const tagEl = document.createElement('span');
+          tagEl.className = 'context-tag';
+          tagEl.textContent = tag;
+          tagsEl.appendChild(tagEl);
+        }
+        card.appendChild(tagsEl);
+      }
+
+      contextSkillsList.appendChild(card);
+    }
+  }
+
+  function renderAgentsList() {
+    contextAgentsList.textContent = '';
+
+    if (contextAgentsMd.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'settings-empty';
+      empty.textContent = 'No AGENTS.md files found';
+      contextAgentsList.appendChild(empty);
+      return;
+    }
+
+    for (const agentsMd of contextAgentsMd) {
+      const card = document.createElement('div');
+      card.className = 'context-card';
+
+      const header = document.createElement('div');
+      header.className = 'context-card-header';
+
+      const name = document.createElement('strong');
+      name.className = 'context-name';
+      name.textContent = agentsMd.projectName;
+
+      const path = document.createElement('div');
+      path.className = 'context-path';
+      path.textContent = agentsMd.path;
+
+      header.appendChild(name);
+
+      card.appendChild(header);
+      card.appendChild(path);
+
+      // Show a preview of the content
+      const preview = document.createElement('div');
+      preview.className = 'context-preview';
+      const lines = agentsMd.content.split('\n').slice(0, 5).join('\n');
+      preview.textContent = lines + (agentsMd.content.split('\n').length > 5 ? '\n...' : '');
+      card.appendChild(preview);
+
+      contextAgentsList.appendChild(card);
+    }
   }
 })();
