@@ -48,6 +48,8 @@
   const queueSection = document.getElementById('queue-section');
   const queueList = document.getElementById('queue-list');
   const queueCount = document.getElementById('queue-count');
+  const fileChips = document.getElementById('file-chips');
+  const autocompleteDropdown = document.getElementById('autocomplete-dropdown');
 
   // ===== Settings View Elements =====
   const settingsBackBtn = document.getElementById('settings-back-btn');
@@ -121,6 +123,12 @@
   let activeFilePath = null;
   let activeFileEnabled = false;
   let abortController = null;
+  let fileReferences = []; // Array of relative file paths attached via @
+  let autocompleteActive = false;
+  let autocompleteQuery = '';
+  let autocompleteStartPos = -1;
+  let autocompleteSelectedIndex = 0;
+  let searchDebounceTimer = null;
 
   const DEFAULT_BASE_URLS = {
     anthropic: 'https://api.anthropic.com',
@@ -139,6 +147,36 @@
   sendBtn.addEventListener('click', sendMessage);
 
   inputEl.addEventListener('keydown', (e) => {
+    // Handle autocomplete navigation
+    if (autocompleteActive) {
+      const items = autocompleteDropdown.querySelectorAll('.autocomplete-item');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        autocompleteSelectedIndex = Math.min(autocompleteSelectedIndex + 1, items.length - 1);
+        updateAutocompleteSelection(items);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        autocompleteSelectedIndex = Math.max(autocompleteSelectedIndex - 1, 0);
+        updateAutocompleteSelection(items);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const selected = items[autocompleteSelectedIndex];
+        if (selected) {
+          selectAutocompleteItem(selected.dataset.path);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeAutocomplete();
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
@@ -167,8 +205,11 @@
     vscode.postMessage({ type: 'getContext' });
   });
 
-  // Auto-resize textarea
-  inputEl.addEventListener('input', autoResizeTextarea);
+  // Auto-resize textarea + autocomplete detection
+  inputEl.addEventListener('input', () => {
+    autoResizeTextarea();
+    detectFileReference();
+  });
 
   // Stop button
   stopBtn.addEventListener('click', stopGeneration);
@@ -462,6 +503,11 @@
         }
         break;
 
+      // File reference search results
+      case 'fileSearchResults':
+        renderAutocompleteResults(message.files || []);
+        break;
+
       // Active file context
       case 'activeFileState':
       case 'activeFileToggled':
@@ -736,6 +782,160 @@
     handleSteering(next.type);
   }
 
+  // ===== File Reference Autocomplete =====
+
+  function detectFileReference() {
+    const text = inputEl.value;
+    const cursorPos = inputEl.selectionStart;
+
+    // Look backwards from cursor for @ or # trigger
+    let triggerPos = -1;
+    for (let i = cursorPos - 1; i >= 0; i--) {
+      const ch = text[i];
+      if (ch === '@' || ch === '#') {
+        // Check it's at start or preceded by whitespace
+        if (i === 0 || /\s/.test(text[i - 1])) {
+          triggerPos = i;
+          break;
+        }
+      }
+      // Stop searching if we hit whitespace (no trigger found in this word)
+      if (/\s/.test(ch)) { break; }
+    }
+
+    if (triggerPos === -1) {
+      closeAutocomplete();
+      return;
+    }
+
+    const query = text.slice(triggerPos + 1, cursorPos);
+    if (query.length < 1) {
+      closeAutocomplete();
+      return;
+    }
+
+    autocompleteActive = true;
+    autocompleteQuery = query;
+    autocompleteStartPos = triggerPos;
+    autocompleteSelectedIndex = 0;
+
+    // Debounce the search
+    if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); }
+    searchDebounceTimer = setTimeout(() => {
+      vscode.postMessage({ type: 'searchFiles', query: query });
+    }, 150);
+  }
+
+  function closeAutocomplete() {
+    autocompleteActive = false;
+    autocompleteQuery = '';
+    autocompleteStartPos = -1;
+    autocompleteDropdown.classList.add('hidden');
+    autocompleteDropdown.textContent = '';
+  }
+
+  function renderAutocompleteResults(files) {
+    autocompleteDropdown.textContent = '';
+
+    if (!autocompleteActive || files.length === 0) {
+      autocompleteDropdown.classList.add('hidden');
+      return;
+    }
+
+    autocompleteDropdown.classList.remove('hidden');
+    autocompleteSelectedIndex = Math.min(autocompleteSelectedIndex, files.length - 1);
+
+    for (let i = 0; i < files.length; i++) {
+      const item = document.createElement('div');
+      item.className = 'autocomplete-item' + (i === autocompleteSelectedIndex ? ' selected' : '');
+      item.dataset.path = files[i];
+
+      const fileName = files[i].split('/').pop();
+      const dirPath = files[i].includes('/') ? files[i].slice(0, files[i].lastIndexOf('/')) : '';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'autocomplete-name';
+      nameEl.textContent = fileName;
+
+      item.appendChild(nameEl);
+
+      if (dirPath) {
+        const pathEl = document.createElement('span');
+        pathEl.className = 'autocomplete-path';
+        pathEl.textContent = dirPath;
+        item.appendChild(pathEl);
+      }
+
+      item.addEventListener('click', () => selectAutocompleteItem(files[i]));
+      item.addEventListener('mouseenter', () => {
+        autocompleteSelectedIndex = i;
+        updateAutocompleteSelection(autocompleteDropdown.querySelectorAll('.autocomplete-item'));
+      });
+
+      autocompleteDropdown.appendChild(item);
+    }
+  }
+
+  function updateAutocompleteSelection(items) {
+    items.forEach((item, i) => {
+      item.classList.toggle('selected', i === autocompleteSelectedIndex);
+    });
+  }
+
+  function selectAutocompleteItem(filePath) {
+    // Replace the @query text with just @filename (keep it readable)
+    const text = inputEl.value;
+    const before = text.slice(0, autocompleteStartPos);
+    const after = text.slice(inputEl.selectionStart);
+    const fileName = filePath.split('/').pop();
+    inputEl.value = before + '@' + fileName + ' ' + after;
+
+    // Add file reference if not already added
+    if (!fileReferences.includes(filePath)) {
+      fileReferences.push(filePath);
+      renderFileChips();
+    }
+
+    closeAutocomplete();
+    inputEl.focus();
+    autoResizeTextarea();
+  }
+
+  function renderFileChips() {
+    fileChips.textContent = '';
+
+    if (fileReferences.length === 0) {
+      fileChips.classList.add('hidden');
+      return;
+    }
+
+    fileChips.classList.remove('hidden');
+
+    for (let i = 0; i < fileReferences.length; i++) {
+      const chip = document.createElement('span');
+      chip.className = 'file-chip';
+
+      const name = document.createElement('span');
+      name.className = 'file-chip-name';
+      name.textContent = fileReferences[i].split('/').pop();
+      name.title = fileReferences[i];
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'file-chip-remove';
+      removeBtn.textContent = '\u2715';
+      removeBtn.title = 'Remove';
+      const idx = i;
+      removeBtn.addEventListener('click', () => {
+        fileReferences.splice(idx, 1);
+        renderFileChips();
+      });
+
+      chip.appendChild(name);
+      chip.appendChild(removeBtn);
+      fileChips.appendChild(chip);
+    }
+  }
+
   function sendMessage() {
     const text = inputEl.value.trim();
     if (!text || isStreaming) { return; }
@@ -749,8 +949,12 @@
     vscode.postMessage({
       type: 'sendMessage',
       text,
-      signal: abortController.signal
+      fileReferences: fileReferences.length > 0 ? [...fileReferences] : undefined,
     });
+
+    // Clear file references after sending
+    fileReferences = [];
+    renderFileChips();
 
     // Reset textarea height
     inputEl.style.height = 'auto';
@@ -1070,14 +1274,14 @@
 
   function updateActiveFileDisplay() {
     if (!activeFilePath) {
-      activeFileDisplay.textContent = 'None';
+      activeFileDisplay.textContent = 'No file';
       activeFileToggle.classList.remove('enabled');
       activeFileToggle.title = 'No file open';
       return;
     }
 
     const fileName = activeFilePath.split('/').pop();
-    activeFileDisplay.textContent = fileName;
+    activeFileDisplay.textContent = (activeFileEnabled ? '\u2713 ' : '') + fileName;
 
     if (activeFileEnabled) {
       activeFileToggle.classList.add('enabled');

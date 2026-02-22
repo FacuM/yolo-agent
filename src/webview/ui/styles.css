@@ -109,12 +109,16 @@ body {
   border: 1px solid var(--vscode-dropdown-border);
   border-radius: 4px;
   font-size: 12px;
-  max-width: 120px;
+  min-width: 0;
+}
+
+#mode-select {
+  flex: 1;
 }
 
 #provider-select {
-  flex: 1;
-  max-width: none;
+  flex: 0 1 auto;
+  max-width: 110px;
 }
 
 #new-chat-btn,
@@ -316,40 +320,111 @@ body {
   font-weight: 600;
 }
 
+/* ===== File Chips (above input) ===== */
+.file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px 0;
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 8px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 12px;
+  font-size: 11px;
+  max-width: 180px;
+}
+
+.file-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-chip-remove {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 10px;
+  opacity: 0.7;
+  line-height: 1;
+}
+
+.file-chip-remove:hover {
+  opacity: 1;
+}
+
+/* ===== Autocomplete Dropdown ===== */
+.autocomplete-dropdown {
+  position: relative;
+  background: var(--vscode-editorSuggestWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-panel-border));
+  border-radius: 4px;
+  margin: 0 8px 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  z-index: 100;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.autocomplete-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.autocomplete-item:hover,
+.autocomplete-item.selected {
+  background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground));
+  color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-list-activeSelectionForeground));
+}
+
+.autocomplete-name {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.autocomplete-path {
+  opacity: 0.5;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ===== Controls Section (Bottom) ===== */
 #controls-section {
   border-top: 1px solid var(--vscode-panel-border);
   background: var(--vscode-editor-background);
-  padding: 8px;
+  padding: 6px 8px;
 }
 
 .control-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.control-row:last-child {
-  margin-bottom: 0;
-}
-
-.control-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 
 .control-label {
   font-size: 10px;
   text-transform: uppercase;
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
 .control-value {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
-  max-width: 150px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -357,19 +432,26 @@ body {
 
 #current-mode-display {
   color: var(--vscode-textLink-foreground);
+  font-size: 11px;
+}
+
+/* Separator dot */
+.control-separator {
+  opacity: 0.3;
+  font-size: 14px;
+  user-select: none;
 }
 
 /* Stop button */
 .stop-btn {
-  padding: 6px 12px;
+  padding: 2px 8px;
   background: var(--vscode-inputValidation-errorBackground);
   color: var(--vscode-errorForeground);
   border: 1px solid var(--vscode-inputValidation-errorBorder);
   border-radius: 4px;
   cursor: pointer;
-  font-size: 18px;
-  min-width: 36px;
-  height: 32px;
+  font-size: 14px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -384,20 +466,21 @@ body {
   cursor: not-allowed;
 }
 
-/* Active file toggle */
+/* Active file toggle - compact inline */
 .active-file-btn {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px 10px;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
   background: var(--vscode-button-secondaryBackground);
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid transparent;
   border-radius: 4px;
   cursor: pointer;
   color: var(--vscode-foreground);
-  text-align: left;
   opacity: 0.6;
   transition: all 0.15s;
+  height: 24px;
+  font-size: 11px;
 }
 
 .active-file-btn:hover {
@@ -411,36 +494,24 @@ body {
   border-color: var(--vscode-focusBorder);
 }
 
-.active-file-btn .control-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  opacity: 0.6;
-}
-
-.active-file-btn .control-value {
-  font-size: 12px;
-  font-weight: 500;
-  max-width: 120px;
+.active-file-btn #active-file-display {
+  max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Steering buttons */
-.steering-row {
-  justify-content: center;
-  flex-wrap: wrap;
-}
-
+/* Steering buttons - inline */
 .steering-btn {
-  padding: 6px 12px;
+  padding: 2px 8px;
   background: var(--vscode-button-secondaryBackground);
   color: var(--vscode-button-secondaryForeground);
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 4px;
+  border: 1px solid transparent;
+  border-radius: 3px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   transition: all 0.15s;
+  height: 22px;
 }
 
 .steering-btn:hover {
@@ -454,8 +525,8 @@ body {
 
 /* Queue section */
 #queue-section {
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: 4px;
+  padding-top: 4px;
   border-top: 1px solid var(--vscode-panel-border);
 }
 
@@ -463,37 +534,37 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .queue-label {
-  font-size: 11px;
+  font-size: 10px;
   text-transform: uppercase;
-  opacity: 0.7;
+  opacity: 0.6;
 }
 
 .queue-count {
   background: var(--vscode-badge-background);
   color: var(--vscode-badge-foreground);
-  padding: 2px 6px;
-  border-radius: 10px;
-  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-size: 10px;
 }
 
 #queue-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .queue-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
+  gap: 6px;
+  padding: 2px 6px;
   background: var(--vscode-input-background);
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: 3px;
+  font-size: 11px;
 }
 
 .queue-item-name {
@@ -508,8 +579,9 @@ body {
   border: none;
   color: var(--vscode-errorForeground);
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 3px;
+  padding: 1px 3px;
+  border-radius: 2px;
+  font-size: 10px;
 }
 
 .queue-item-remove:hover {

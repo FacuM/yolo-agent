@@ -64,7 +64,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       switch (message.type) {
         // Chat messages
         case 'sendMessage':
-          await this.handleSendMessage(message.text, message.signal);
+          await this.handleSendMessage(message.text, message.signal, message.fileReferences);
           break;
         case 'switchProvider':
           this.registry.setActiveProvider(message.providerId);
@@ -149,6 +149,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'getActiveFile':
           this.sendActiveFileState();
           break;
+
+        // File reference search
+        case 'searchFiles':
+          await this.handleSearchFiles(message.query);
+          break;
+        case 'readFileReference':
+          await this.handleReadFileReference(message.path);
+          break;
       }
     });
 
@@ -188,7 +196,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   // --- Chat handlers ---
 
-  private async handleSendMessage(text: string, signal?: unknown): Promise<void> {
+  private async handleSendMessage(text: string, signal?: unknown, fileReferences?: string[]): Promise<void> {
     const provider = this.registry.getActiveProvider();
     if (!provider) {
       this.postMessage({
@@ -215,6 +223,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Add active file context if enabled
     if (this.activeFileEnabled && this.activeFileContext) {
       modePrompt += `\n\n--- Active File Context ---\nThe user currently has "${this.activeFileContext.path}" open. Its contents:\n\`\`\`\n${this.activeFileContext.content}\n\`\`\``;
+    }
+
+    // Add file references context
+    if (fileReferences && fileReferences.length > 0) {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      if (workspaceFolder) {
+        const fileContents: string[] = [];
+        for (const refPath of fileReferences) {
+          try {
+            const uri = vscode.Uri.joinPath(workspaceFolder.uri, refPath);
+            const doc = await vscode.workspace.openTextDocument(uri);
+            fileContents.push(`--- ${refPath} ---\n\`\`\`\n${doc.getText()}\n\`\`\``);
+          } catch {
+            fileContents.push(`--- ${refPath} ---\n(Could not read file)`);
+          }
+        }
+        modePrompt += `\n\n--- Referenced Files ---\n${fileContents.join('\n\n')}`;
+      }
     }
 
     const userMessage = { role: 'user' as const, content: text };
@@ -386,6 +412,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  // --- File reference handlers ---
+
+  private async handleSearchFiles(query: string): Promise<void> {
+    if (!query || query.length < 1) {
+      this.postMessage({ type: 'fileSearchResults', files: [] });
+      return;
+    }
+
+    try {
+      const pattern = `**/*${query}*`;
+      const uris = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 20);
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+
+      const files = uris.map(uri => {
+        const fullPath = uri.fsPath;
+        const relativePath = workspaceFolder
+          ? fullPath.replace(workspaceFolder.uri.fsPath + '/', '')
+          : fullPath;
+        return relativePath;
+      }).sort((a, b) => a.length - b.length);
+
+      this.postMessage({ type: 'fileSearchResults', files });
+    } catch {
+      this.postMessage({ type: 'fileSearchResults', files: [] });
+    }
+  }
+
+  private async handleReadFileReference(relativePath: string): Promise<void> {
+    try {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      if (!workspaceFolder) {
+        this.postMessage({ type: 'fileReferenceContent', path: relativePath, content: null });
+        return;
+      }
+
+      const uri = vscode.Uri.joinPath(workspaceFolder.uri, relativePath);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      this.postMessage({
+        type: 'fileReferenceContent',
+        path: relativePath,
+        content: doc.getText(),
+      });
+    } catch {
+      this.postMessage({ type: 'fileReferenceContent', path: relativePath, content: null });
+    }
+  }
+
   // --- Active file handlers ---
 
   private sendActiveFileState(): void {
@@ -540,10 +613,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           <button id="context-btn" title="Context">\u{1F4D6}</button>
           <button id="settings-btn" title="Settings">\u2699</button>
         </div>
+        <div id="file-chips" class="file-chips hidden"></div>
         <div class="input-wrapper">
-          <textarea id="message-input" placeholder="Ask YOLO Agent..." rows="1" data-autoresize></textarea>
+          <textarea id="message-input" placeholder="Ask YOLO Agent... (@ to reference files)" rows="1" data-autoresize></textarea>
           <button id="send-btn" title="Send" disabled>\u27A4</button>
         </div>
+        <div id="autocomplete-dropdown" class="autocomplete-dropdown hidden"></div>
       </div>
 
       <!-- Messages in middle -->
@@ -552,31 +627,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <!-- Controls at bottom -->
       <div id="controls-section">
         <div class="control-row">
-          <div class="control-group">
-            <span class="control-label">Mode</span>
-            <span id="current-mode-display" class="control-value">Sandbox</span>
-          </div>
+          <span id="current-mode-display" class="control-value" title="Current mode">Sandbox</span>
+          <span class="control-separator">\u00B7</span>
           <button id="active-file-toggle" class="active-file-btn" title="Toggle active file as context">
-            <span class="control-label">File</span>
-            <span id="active-file-display" class="control-value">None</span>
+            <span id="active-file-display">None</span>
           </button>
-          <div class="control-group">
-            <button id="stop-btn" class="stop-btn" title="Stop generation" disabled>\u23F9</button>
-          </div>
-        </div>
-
-        <!-- Steering buttons -->
-        <div class="control-row steering-row">
+          <span class="control-separator">\u00B7</span>
           <button class="steering-btn" data-steer="continue">Continue</button>
           <button class="steering-btn" data-steer="retry">Retry</button>
           <button class="steering-btn" data-steer="summarize">Summarize</button>
           <button class="steering-btn" data-steer="expand">Expand</button>
+          <span style="flex:1"></span>
+          <button id="stop-btn" class="stop-btn" title="Stop generation" disabled>\u23F9</button>
         </div>
-
-        <!-- Queue indicator -->
         <div id="queue-section" class="hidden">
           <div class="queue-header">
-            <span class="queue-label">Queued Commands</span>
+            <span class="queue-label">Queue</span>
             <span id="queue-count" class="queue-count">0</span>
           </div>
           <div id="queue-list"></div>
