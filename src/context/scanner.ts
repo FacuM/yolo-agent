@@ -54,7 +54,7 @@ export class ContextScanner {
   private skills: Map<string, Skill> = new Map();
   private agentsMdFiles: Map<string, AgentsMd> = new Map();
   private fileWatcher: vscode.FileSystemWatcher | undefined;
-  private skillsWatcher: vscode.FileSystemWatcher | undefined;
+  private skillsWatchers: vscode.FileSystemWatcher[] = [];
   private _onDidChangeContext = new vscode.EventEmitter<void>();
   private workspaceFolder: vscode.WorkspaceFolder | undefined;
 
@@ -81,25 +81,35 @@ export class ContextScanner {
   }
 
   /**
-   * Scan .yolo-agent/skills/*.md for skill files
+   * Scan for skill files in multiple common directories
+   * Checks: .yolo-agent/skills, .kilo/skills, .claude/skills, .cline/skills
    */
   private async scanSkillsDirectory(): Promise<void> {
     if (!this.workspaceFolder) {
       return;
     }
 
-    const skillsPattern = new vscode.RelativePattern(
-      this.workspaceFolder,
-      '**/.yolo-agent/skills/*.md'
-    );
-
-    const files = await vscode.workspace.findFiles(skillsPattern, '**/node_modules/**');
+    // Define multiple skill directory patterns to check
+    const skillsPatterns = [
+      new vscode.RelativePattern(this.workspaceFolder, '**/.yolo-agent/skills/*.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.kilo/skills/*.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.claude/skills/*.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.cline/skills/*.md'),
+    ];
 
     // Clear existing skills
     this.skills.clear();
 
-    for (const file of files) {
-      await this.loadSkillFile(file);
+    // Scan each pattern and load files
+    for (const pattern of skillsPatterns) {
+      try {
+        const files = await vscode.workspace.findFiles(pattern, '**/node_modules/**');
+        for (const file of files) {
+          await this.loadSkillFile(file);
+        }
+      } catch {
+        // Pattern might not match any files, continue to next pattern
+      }
     }
   }
 
@@ -208,25 +218,36 @@ export class ContextScanner {
       return;
     }
 
-    // Watch for changes to skill files
-    this.skillsWatcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(this.workspaceFolder, '**/.yolo-agent/skills/*.md')
-    );
+    // Watch for changes to skill files in all supported directories
+    const skillsPatterns = [
+      '**/.yolo-agent/skills/*.md',
+      '**/.kilo/skills/*.md',
+      '**/.claude/skills/*.md',
+      '**/.cline/skills/*.md',
+    ];
 
-    this.skillsWatcher.onDidCreate(async (uri) => {
-      await this.loadSkillFile(uri);
-      this._onDidChangeContext.fire();
-    });
+    for (const pattern of skillsPatterns) {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(this.workspaceFolder, pattern)
+      );
 
-    this.skillsWatcher.onDidChange(async (uri) => {
-      await this.loadSkillFile(uri);
-      this._onDidChangeContext.fire();
-    });
+      watcher.onDidCreate(async (uri) => {
+        await this.loadSkillFile(uri);
+        this._onDidChangeContext.fire();
+      });
 
-    this.skillsWatcher.onDidDelete((uri) => {
-      this.skills.delete(uri.fsPath);
-      this._onDidChangeContext.fire();
-    });
+      watcher.onDidChange(async (uri) => {
+        await this.loadSkillFile(uri);
+        this._onDidChangeContext.fire();
+      });
+
+      watcher.onDidDelete((uri) => {
+        this.skills.delete(uri.fsPath);
+        this._onDidChangeContext.fire();
+      });
+
+      this.skillsWatchers.push(watcher);
+    }
 
     // Watch for changes to AGENTS.md files
     const agentsMdPattern = new vscode.RelativePattern(this.workspaceFolder, '**/AGENTS.md');
@@ -262,7 +283,10 @@ export class ContextScanner {
    * Dispose of watchers and event emitters
    */
   dispose(): void {
-    this.skillsWatcher?.dispose();
+    for (const watcher of this.skillsWatchers) {
+      watcher.dispose();
+    }
+    this.skillsWatchers = [];
     this.fileWatcher?.dispose();
     this._onDidChangeContext.dispose();
   }
