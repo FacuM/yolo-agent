@@ -497,6 +497,9 @@ Rules:
           // Execute each tool and collect results
           const toolResults: ProviderToolResult[] = [];
           for (const toolCall of response.toolCalls) {
+            // Check abort between tool executions
+            if (abortCtrl.signal.aborted) { break; }
+
             this.postSessionMessage(sessionId, {
               type: 'toolCallStarted',
               name: toolCall.name,
@@ -571,6 +574,9 @@ Rules:
           messages.push(toolResultsMsg);
           this.sessionManager.addMessage(sessionId, toolResultsMsg);
 
+          // If aborted during tool execution, break out immediately
+          if (abortCtrl.signal.aborted) { break; }
+
           // ── Loop detection: if the LLM keeps calling the same tools, nudge it ──
           const callSigs = response.toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`).join('|');
           recentToolCalls.push(callSigs);
@@ -605,6 +611,17 @@ Rules:
 
           keepLooping = false;
         }
+      }
+
+      // If aborted during the tool loop (not via thrown error), handle it here
+      if (abortCtrl.signal.aborted) {
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: '\n\n*[Generation stopped]*',
+        });
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        this.sessionManager.setSessionStatus(sessionId, 'idle');
+        return '[CANCELLED]';
       }
 
       this.postSessionMessage(sessionId, { type: 'messageComplete' });
