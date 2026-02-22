@@ -8,6 +8,7 @@ import { ContextManager } from '../context/manager';
 import { McpConfigManager } from '../mcp/config';
 import { McpClient } from '../mcp/client';
 import { McpServerConfig } from '../mcp/types';
+import { SessionManager, BufferedMessage } from '../sessions/manager';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'yoloAgent.chatView';
@@ -18,11 +19,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private modeManager: ModeManager;
   private tools: Map<string, Tool>;
   private extensionUri: vscode.Uri;
-  private conversationHistory: { role: 'user' | 'assistant'; content: string }[] = [];
+  private sessionManager: SessionManager;
+  private abortControllers = new Map<string, AbortController>();
   private contextManager: ContextManager;
   private mcpConfigManager: McpConfigManager;
   private mcpClient: McpClient;
-  private abortController: AbortController | null = null;
   private activeFileContext: { path: string; content: string } | null = null;
   private activeFileEnabled = false;
 
@@ -44,6 +45,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.contextManager = contextManager;
     this.mcpConfigManager = mcpConfigManager;
     this.mcpClient = mcpClient;
+    this.sessionManager = new SessionManager();
+
+    // Notify webview whenever session list changes
+    this.sessionManager.onDidChange = () => {
+      this.sendSessionList();
+    };
   }
 
   resolveWebviewView(
@@ -83,14 +90,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.sendModelListForActiveProvider();
           break;
         case 'cancelRequest':
-          if (this.abortController) {
-            this.abortController.abort();
-            this.abortController = null;
+          {
+            const activeId = this.sessionManager.getActiveSessionId();
+            if (activeId) {
+              const ctrl = this.abortControllers.get(activeId);
+              if (ctrl) {
+                ctrl.abort();
+                this.abortControllers.delete(activeId);
+              }
+            }
           }
           break;
         case 'newChat':
-          this.conversationHistory = [];
-          this.postMessage({ type: 'chatCleared' });
+          this.handleNewChat();
+          break;
+        case 'getSessions':
+          this.sendSessionList();
+          break;
+        case 'switchSession':
+          this.handleSwitchSession(message.sessionId);
+          break;
+        case 'deleteSession':
+          this.handleDeleteSession(message.sessionId);
           break;
         case 'getModes':
           this.handleGetModes();
@@ -171,6 +192,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.sendProviderList();
     this.handleGetModes();
     this.handleGetContext();
+    this.sendSessionList();
 
     // Re-send provider list after registry finishes re-initializing
     this.registry.onDidChangeProviders(() => {
@@ -203,6 +225,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   // --- Chat handlers ---
 
+  /**
+   * Send a message to the active session's webview, or buffer it if the session is in the background.
+   */
+  private postSessionMessage(sessionId: string, message: Record<string, unknown>): void {
+    if (this.sessionManager.isActiveSession(sessionId)) {
+      this.postMessage(message);
+    } else {
+      this.sessionManager.bufferMessage(sessionId, message as BufferedMessage);
+    }
+  }
+
   private async handleSendMessage(text: string, signal?: unknown, fileReferences?: string[]): Promise<void> {
     const provider = this.registry.getActiveProvider();
     if (!provider) {
@@ -212,6 +245,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
       return;
     }
+
+    // Get or create the active session
+    const session = this.sessionManager.getOrCreateActiveSession(
+      this.registry.getActiveProviderId(),
+      this.registry.getActiveModelId()
+    );
+    const sessionId = session.id;
+
+    // Auto-title from first user message
+    this.sessionManager.updateTitleFromMessage(sessionId, text);
 
     // Get allowed tools based on current mode
     const allToolNames = Array.from(this.tools.keys());
@@ -250,22 +293,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
+    const history = this.sessionManager.getHistory(sessionId);
     const userMessage = { role: 'user' as const, content: text };
     const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
       { role: 'system', content: modePrompt },
-      ...this.conversationHistory,
+      ...history,
       userMessage,
     ];
 
-    this.conversationHistory.push({ role: 'user', content: text });
+    this.sessionManager.addMessage(sessionId, { role: 'user', content: text });
+    this.sessionManager.setSessionStatus(sessionId, 'busy');
 
-    // Store abort controller for cancellation
-    if (signal instanceof AbortSignal) {
-      signal.addEventListener('abort', () => {
-        this.postMessage({ type: 'messageComplete' });
-      });
-      this.abortController = { signal } as any;
-    }
+    // Create abort controller for this session
+    const abortCtrl = new AbortController();
+    this.abortControllers.set(sessionId, abortCtrl);
 
     try {
       const model = this.registry.getActiveModelId();
@@ -274,18 +315,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         messages,
         { model, tools: allowedTools },
         (chunk) => {
-          this.postMessage({ type: 'streamChunk', content: chunk });
+          this.postSessionMessage(sessionId, { type: 'streamChunk', content: chunk });
         }
       );
 
       // Send thinking content if present (for Claude extended thinking and OpenAI o-series)
       if (response.thinking) {
-        this.postMessage({ type: 'thinking', content: response.thinking });
+        this.postSessionMessage(sessionId, { type: 'thinking', content: response.thinking });
       }
 
       if (response.toolCalls && response.toolCalls.length > 0) {
         for (const toolCall of response.toolCalls) {
-          this.postMessage({
+          this.postSessionMessage(sessionId, {
             type: 'toolCallStarted',
             name: toolCall.name,
             id: toolCall.id,
@@ -294,7 +335,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const tool = this.tools.get(toolCall.name);
           if (tool) {
             const result = await tool.execute(toolCall.arguments);
-            this.postMessage({
+            this.postSessionMessage(sessionId, {
               type: 'toolCallResult',
               id: toolCall.id,
               name: toolCall.name,
@@ -305,20 +346,95 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
 
-      this.postMessage({ type: 'messageComplete' });
+      this.postSessionMessage(sessionId, { type: 'messageComplete' });
 
       if (response.content) {
-        this.conversationHistory.push({
+        this.sessionManager.addMessage(sessionId, {
           role: 'assistant',
           content: response.content,
         });
       }
+      this.sessionManager.setSessionStatus(sessionId, 'idle');
     } catch (err) {
-      this.postMessage({
+      this.postSessionMessage(sessionId, {
         type: 'error',
         message: err instanceof Error ? err.message : String(err),
       });
+      this.sessionManager.setSessionStatus(sessionId, 'error');
+    } finally {
+      this.abortControllers.delete(sessionId);
     }
+  }
+
+  // --- Session handlers ---
+
+  private handleNewChat(): void {
+    const session = this.sessionManager.createSession(
+      this.registry.getActiveProviderId(),
+      this.registry.getActiveModelId()
+    );
+    this.sessionManager.switchSession(session.id);
+    this.postMessage({ type: 'chatCleared' });
+    this.sendSessionList();
+  }
+
+  private handleSwitchSession(sessionId: string): void {
+    const session = this.sessionManager.switchSession(sessionId);
+    if (!session) { return; }
+
+    // Replay session's conversation history to the webview
+    this.postMessage({ type: 'chatCleared' });
+
+    for (const msg of session.history) {
+      if (msg.role === 'system') { continue; }
+      this.postMessage({
+        type: 'replayMessage',
+        role: msg.role,
+        content: msg.content,
+      });
+    }
+
+    // Flush any buffered messages from background execution
+    const buffered = this.sessionManager.drainBuffer(sessionId);
+    for (const msg of buffered) {
+      this.postMessage(msg);
+    }
+
+    // If this session is still busy, let the webview know it's streaming
+    if (session.status === 'busy') {
+      this.postMessage({ type: 'sessionResumed' });
+    }
+
+    this.sendSessionList();
+  }
+
+  private handleDeleteSession(sessionId: string): void {
+    // Abort if running
+    const ctrl = this.abortControllers.get(sessionId);
+    if (ctrl) {
+      ctrl.abort();
+      this.abortControllers.delete(sessionId);
+    }
+
+    this.sessionManager.deleteSession(sessionId);
+
+    // If that was the active session, switch view
+    const activeSession = this.sessionManager.getActiveSession();
+    if (activeSession) {
+      this.handleSwitchSession(activeSession.id);
+    } else {
+      this.postMessage({ type: 'chatCleared' });
+    }
+    this.sendSessionList();
+  }
+
+  private sendSessionList(): void {
+    const sessions = this.sessionManager.getSessionList();
+    this.postMessage({
+      type: 'sessions',
+      sessions,
+      activeSessionId: this.sessionManager.getActiveSessionId(),
+    });
   }
 
   // --- Profile handlers ---
@@ -632,6 +748,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             <option value="">No model</option>
           </select>
           <button id="new-chat-btn" title="New chat">\u2795</button>
+          <button id="sessions-btn" title="Sessions">\u{1F4AC}</button>
           <button id="context-btn" title="Context">\u{1F4D6}</button>
           <button id="settings-btn" title="Settings">\u2699</button>
         </div>
@@ -670,6 +787,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           <div id="queue-list"></div>
         </div>
       </div>
+    </div>
+
+    <!-- Sessions Drawer -->
+    <div id="sessions-view" class="hidden">
+      <div id="sessions-header">
+        <button id="sessions-back-btn" title="Back to chat">\u2190</button>
+        <span class="header-title">Sessions</span>
+      </div>
+      <div id="sessions-list"></div>
     </div>
 
     <!-- Settings: Provider List -->

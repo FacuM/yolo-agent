@@ -19,8 +19,9 @@
   const contextView = document.getElementById('context-view');
   const mcpView = document.getElementById('mcp-view');
   const mcpEditorView = document.getElementById('mcp-editor-view');
+  const sessionsView = document.getElementById('sessions-view');
 
-  let currentView = 'chat'; // 'chat' | 'settings' | 'editor' | 'context' | 'mcp' | 'mcp-editor'
+  let currentView = 'chat'; // 'chat' | 'settings' | 'editor' | 'context' | 'mcp' | 'mcp-editor' | 'sessions'
 
   function showView(view) {
     currentView = view;
@@ -30,6 +31,7 @@
     contextView.classList.toggle('hidden', view !== 'context');
     mcpView.classList.toggle('hidden', view !== 'mcp');
     mcpEditorView.classList.toggle('hidden', view !== 'mcp-editor');
+    sessionsView.classList.toggle('hidden', view !== 'sessions');
   }
 
   // ===== Chat View Elements =====
@@ -41,6 +43,9 @@
   const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById('provider-select'));
   const modelSelect = /** @type {HTMLSelectElement} */ (document.getElementById('model-select'));
   const newChatBtn = document.getElementById('new-chat-btn');
+  const sessionsBtn = document.getElementById('sessions-btn');
+  const sessionsBackBtn = document.getElementById('sessions-back-btn');
+  const sessionsList = document.getElementById('sessions-list');
   const contextBtn = document.getElementById('context-btn');
   const settingsBtn = document.getElementById('settings-btn');
   const currentModeDisplay = document.getElementById('current-mode-display');
@@ -198,6 +203,15 @@
 
   newChatBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'newChat' });
+  });
+
+  sessionsBtn.addEventListener('click', () => {
+    showView('sessions');
+    vscode.postMessage({ type: 'getSessions' });
+  });
+
+  sessionsBackBtn.addEventListener('click', () => {
+    showView('chat');
   });
 
   settingsBtn.addEventListener('click', () => {
@@ -468,6 +482,30 @@
         showEmptyState();
         break;
 
+      // Session messages
+      case 'sessions':
+        renderSessionList(message.sessions || [], message.activeSessionId);
+        break;
+      case 'replayMessage':
+        removeEmptyState();
+        appendMessage(message.role, message.content);
+        break;
+      case 'sessionResumed':
+        // The switched-to session is still streaming — restore streaming UI state
+        isStreaming = true;
+        sendBtn.disabled = true;
+        stopBtn.disabled = false;
+        currentAssistantEl = messagesEl.querySelector('.message.assistant:last-child');
+        if (currentAssistantEl) {
+          currentAssistantText = currentAssistantEl.textContent || '';
+          addStreamingCursor(currentAssistantEl);
+        } else {
+          currentAssistantEl = appendMessage('assistant', '');
+          currentAssistantText = '';
+          addStreamingCursor(currentAssistantEl);
+        }
+        break;
+
       // Settings messages
       case 'profiles':
         profiles = message.profiles;
@@ -672,6 +710,78 @@
       case 'openai-compatible': return 'OpenAI Compatible';
       default: return kind;
     }
+  }
+
+  // ===== Sessions Functions =====
+
+  function renderSessionList(sessions, activeSessionId) {
+    sessionsList.textContent = '';
+
+    if (sessions.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'sessions-empty';
+      empty.textContent = 'No sessions yet';
+      sessionsList.appendChild(empty);
+      return;
+    }
+
+    for (const session of sessions) {
+      const card = document.createElement('div');
+      card.className = 'session-card' + (session.id === activeSessionId ? ' active' : '');
+
+      // Status dot
+      const status = document.createElement('div');
+      status.className = 'session-status ' + session.status;
+      status.title = session.status === 'busy' ? 'Running' : session.status === 'error' ? 'Error' : 'Idle';
+
+      // Info section
+      const info = document.createElement('div');
+      info.className = 'session-info';
+
+      const title = document.createElement('div');
+      title.className = 'session-title';
+      title.textContent = session.title;
+
+      const meta = document.createElement('div');
+      meta.className = 'session-meta';
+      meta.textContent = session.messageCount + ' message' + (session.messageCount !== 1 ? 's' : '') + ' \u00B7 ' + timeAgo(session.updatedAt);
+
+      info.appendChild(title);
+      info.appendChild(meta);
+
+      // Delete button
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'session-delete';
+      deleteBtn.textContent = '\u2715';
+      deleteBtn.title = 'Delete session';
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        vscode.postMessage({ type: 'deleteSession', sessionId: session.id });
+      });
+
+      card.appendChild(status);
+      card.appendChild(info);
+      card.appendChild(deleteBtn);
+
+      // Click to switch
+      card.addEventListener('click', () => {
+        vscode.postMessage({ type: 'switchSession', sessionId: session.id });
+        showView('chat');
+      });
+
+      sessionsList.appendChild(card);
+    }
+  }
+
+  function timeAgo(timestamp) {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) { return 'just now'; }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) { return minutes + 'm ago'; }
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) { return hours + 'h ago'; }
+    const days = Math.floor(hours / 24);
+    return days + 'd ago';
   }
 
   // ===== Chat Functions =====

@@ -1094,3 +1094,121 @@ body {
   opacity: 1;
   background: var(--vscode-button-secondaryHoverBackground);
 }
+
+/* ===== Sessions View ===== */
+
+#sessions-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+#sessions-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+#sessions-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.session-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background 0.1s;
+}
+
+.session-card:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.session-card.active {
+  border-left-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.session-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.session-status.idle {
+  background: var(--vscode-charts-gray, #888);
+}
+
+.session-status.busy {
+  background: var(--vscode-charts-blue, #3794ff);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.session-status.error {
+  background: var(--vscode-errorForeground, #f44);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.session-info {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.session-title {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-meta {
+  font-size: 10px;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-delete {
+  background: none;
+  border: none;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  opacity: 0;
+  flex-shrink: 0;
+  transition: opacity 0.1s;
+}
+
+.session-card:hover .session-delete {
+  opacity: 0.5;
+}
+
+.session-delete:hover {
+  opacity: 1 !important;
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.sessions-empty {
+  padding: 20px 12px;
+  text-align: center;
+  opacity: 0.6;
+  font-size: 12px;
+}
