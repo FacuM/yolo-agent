@@ -6,21 +6,32 @@ import { Tool } from './tools/types';
 import { ReadFileTool, WriteFileTool, ListFilesTool } from './tools/file-ops';
 import { RunTerminalTool } from './tools/terminal';
 import { GetDiagnosticsTool } from './tools/diagnostics';
+import {
+  CreateSandboxTool,
+  SwitchModeTool,
+  GetSandboxStatusTool,
+  ExitSandboxTool,
+  RunSandboxedCommandTool,
+} from './tools/sandbox';
 import { ModeManager } from './modes/manager';
 import { ContextManager } from './context/manager';
 import { McpConfigManager } from './mcp/config';
 import { McpClient } from './mcp/client';
 import { McpToolBridge } from './mcp/bridge';
+import { SandboxManager } from './sandbox/manager';
 
 let profileManager: ProfileManager;
 let registry: ProviderRegistry;
 let mcpConfigManager: McpConfigManager;
 let mcpClient: McpClient;
 let mcpToolBridge: McpToolBridge;
+let sandboxManager: SandboxManager | undefined;
 
 export async function activate(
   context: vscode.ExtensionContext
 ): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+
   // Initialize profile manager and provider registry
   profileManager = new ProfileManager(context.globalState, context.secrets);
   registry = new ProviderRegistry(profileManager);
@@ -33,6 +44,11 @@ export async function activate(
   // Initialize context manager
   const contextManager = new ContextManager();
   await contextManager.initialize();
+
+  // Initialize sandbox manager only if workspace exists
+  if (workspaceFolder) {
+    sandboxManager = new SandboxManager(workspaceFolder);
+  }
 
   // Initialize MCP components
   mcpConfigManager = new McpConfigManager(context.globalState, vscode.workspace.workspaceFolders || []);
@@ -69,15 +85,30 @@ export async function activate(
     vscode.commands.executeCommand('yoloAgent.chatView.focus');
   });
 
-  // Initialize tools
+  // Initialize tools with sandbox awareness (optional sandboxManager)
   const tools = new Map<string, Tool>();
   const toolInstances: Tool[] = [
     new ReadFileTool(),
-    new WriteFileTool(),
+    new WriteFileTool(sandboxManager),
     new ListFilesTool(),
-    new RunTerminalTool(),
+    new RunTerminalTool(sandboxManager),
     new GetDiagnosticsTool(),
   ];
+
+  // Add sandbox tools only if sandbox manager is available
+  if (sandboxManager) {
+    toolInstances.push(
+      new CreateSandboxTool(sandboxManager),
+      new SwitchModeTool(modeManager, sandboxManager),
+      new GetSandboxStatusTool(sandboxManager),
+      new ExitSandboxTool(sandboxManager),
+      new RunSandboxedCommandTool(sandboxManager)
+    );
+  } else {
+    // Add switchMode tool without sandbox support
+    toolInstances.push(new SwitchModeTool(modeManager));
+  }
+
   for (const tool of toolInstances) {
     tools.set(tool.definition.name, tool);
   }
@@ -145,11 +176,63 @@ export async function activate(
     })
   );
 
+  // Sandbox status bar indicator (only if sandbox manager exists)
+  if (sandboxManager) {
+    const statusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Right,
+      100
+    );
+    statusBarItem.command = 'yoloAgent.showSandboxStatus';
+    context.subscriptions.push(statusBarItem);
+
+    const updateSandboxStatus = () => {
+      const info = sandboxManager!.getSandboxInfo();
+      if (info.isActive) {
+        statusBarItem.text = `$(container) ${info.config?.branchName || 'Sandbox'}`;
+        statusBarItem.tooltip = info.config?.worktreePath || 'Sandbox active';
+        statusBarItem.show();
+      } else {
+        statusBarItem.hide();
+      }
+    };
+
+    // Update status when sandbox changes
+    sandboxManager.onDidChangeSandbox(updateSandboxStatus);
+    updateSandboxStatus();
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('yoloAgent.showSandboxStatus', async () => {
+        const info = sandboxManager!.getSandboxInfo();
+        if (info.isActive) {
+          const actions = await vscode.window.showQuickPick(
+            [
+              { label: 'Exit Sandbox', value: 'exit' },
+              { label: 'Show Details', value: 'details' },
+            ],
+            { placeHolder: `Sandbox: ${info.config?.branchName}` }
+          );
+
+          if (actions?.value === 'exit') {
+            await sandboxManager!.exitSandbox();
+          } else if (actions?.value === 'details') {
+            vscode.window.showInformationMessage(
+              `Sandbox: ${info.config?.branchName}\nPath: ${info.config?.worktreePath}`,
+              { modal: true }
+            );
+          }
+        } else {
+          vscode.window.showInformationMessage('No active sandbox');
+        }
+      })
+    );
+  }
+
   context.subscriptions.push(
     { dispose: () => profileManager.dispose() },
     { dispose: () => registry.dispose() },
     { dispose: () => modeManager.dispose() },
     { dispose: () => contextManager.dispose() },
+    { dispose: () => sandboxManager?.dispose() },
     { dispose: async () => { await mcpClient.disconnectAll(); mcpConfigManager.dispose(); } }
   );
 }

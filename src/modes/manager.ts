@@ -39,7 +39,7 @@ export class ModeManager {
     if (this.currentModeId === 'custom' && this.customModes.has('custom')) {
       return this.customModes.get('custom')!;
     }
-    return BUILT_IN_MODES[this.currentModeId as keyof typeof BUILT_IN_MODES] || BUILT_IN_MODES.agent;
+    return BUILT_IN_MODES[this.currentModeId as keyof typeof BUILT_IN_MODES] || BUILT_IN_MODES.sandbox;
   }
 
   async setCurrentMode(modeId: ModeId) {
@@ -81,9 +81,9 @@ export class ModeManager {
         console.error('ModeManager: Failed to delete custom mode', err);
       }
 
-      // Fall back to agent mode if we deleted the current mode
+      // Fall back to sandbox mode if we deleted the current mode
       if (this.currentModeId === modeId) {
-        await this.setCurrentMode('agent');
+        await this.setCurrentMode('sandbox');
       }
       this._onDidChangeCustomModes.fire();
     }

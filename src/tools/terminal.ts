@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
 import { Tool, ToolResult } from './types';
+import { SandboxManager } from '../sandbox/manager';
 
 export class RunTerminalTool implements Tool {
+  private sandboxManager?: SandboxManager;
+
   definition = {
     name: 'runTerminal',
     description:
@@ -22,9 +25,24 @@ export class RunTerminalTool implements Tool {
     },
   };
 
+  constructor(sandboxManager?: SandboxManager) {
+    this.sandboxManager = sandboxManager;
+  }
+
   async execute(params: Record<string, unknown>): Promise<ToolResult> {
     const command = params.command as string;
     const cwd = params.cwd as string | undefined;
+
+    // Check sandbox restrictions if in sandbox mode
+    if (this.sandboxManager) {
+      const check = this.sandboxManager.isCommandAllowed(command);
+      if (!check.allowed) {
+        return {
+          content: `Command blocked: ${check.reason}`,
+          isError: true,
+        };
+      }
+    }
 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
 

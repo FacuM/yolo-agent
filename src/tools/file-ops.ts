@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { Tool, ToolResult } from './types';
+import { SandboxManager } from '../sandbox/manager';
 
 export class ReadFileTool implements Tool {
   definition = {
@@ -61,6 +62,8 @@ export class ReadFileTool implements Tool {
 }
 
 export class WriteFileTool implements Tool {
+  private sandboxManager?: SandboxManager;
+
   definition = {
     name: 'writeFile',
     description:
@@ -81,9 +84,24 @@ export class WriteFileTool implements Tool {
     },
   };
 
+  constructor(sandboxManager?: SandboxManager) {
+    this.sandboxManager = sandboxManager;
+  }
+
   async execute(params: Record<string, unknown>): Promise<ToolResult> {
     const filePath = params.path as string;
     const content = params.content as string;
+
+    // Check sandbox restrictions if in sandbox mode
+    if (this.sandboxManager) {
+      const check = this.sandboxManager.isFilePathAllowed(filePath);
+      if (!check.allowed) {
+        return {
+          content: `File write blocked: ${check.reason}`,
+          isError: true,
+        };
+      }
+    }
 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
