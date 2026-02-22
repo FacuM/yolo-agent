@@ -62,7 +62,13 @@ For trivial requests, a single TODO is fine — do NOT over-split.`;
 - Do NOT skip items. If one depends on another, complete the dependency first.
 - When you finish all items, say "ALL TODOS COMPLETE".
 
-CRITICAL: You have full tool access. Start writing code and running commands right away. Do NOT loop on listFiles or getDiagnostics without producing files.`;
+CRITICAL RULES:
+1. You have full tool access. Start writing code and running commands right away.
+2. Do NOT loop on listFiles, getDiagnostics, or getSandboxStatus without producing files.
+3. If a tool returns an error, READ the error message and follow its instructions. Then try an alternative tool.
+4. For running commands: prefer runTerminal. Only use runSandboxedCommand if a sandbox has been created with createSandbox.
+5. If you encounter "No sandbox is currently active" error, switch to runTerminal immediately.
+6. Your FIRST tool call should be either writeFile or runTerminal — never a read-only tool.`;
 
   private static readonly SMART_TODO_VERIFY_PROMPT = `You are a QA verification assistant. You were given a plan and the AI attempted to complete it. Now verify the work.
 
@@ -577,21 +583,46 @@ Rules:
           // If aborted during tool execution, break out immediately
           if (abortCtrl.signal.aborted) { break; }
 
-          // ── Loop detection: if the LLM keeps calling the same tools, nudge it ──
+          // ── Loop detection: catch both identical calls AND read-only tool spinning ──
+          const READ_ONLY_TOOLS = new Set(['listFiles', 'readFile', 'getDiagnostics', 'getSandboxStatus']);
           const callSigs = response.toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`).join('|');
+          const allReadOnly = response.toolCalls.every(tc => READ_ONLY_TOOLS.has(tc.name));
           recentToolCalls.push(callSigs);
-          if (recentToolCalls.length >= 3) {
-            const last3 = recentToolCalls.slice(-3);
-            if (last3[0] === last3[1] && last3[1] === last3[2]) {
-              // Inject a corrective nudge as a user message
-              const nudge: ChatMessage = {
-                role: 'user',
-                content: '[SYSTEM] You are repeating the same tool calls without making progress. STOP listing/reading and START creating files with writeFile or running commands with runTerminal. Implement the next pending TODO item NOW.',
-              };
-              messages.push(nudge);
-              this.sessionManager.addMessage(sessionId, nudge);
-              recentToolCalls.length = 0; // Reset to give it a fresh chance
-            }
+
+          // Track consecutive read-only iterations
+          if (!('readOnlyStreak' in recentToolCalls)) {
+            (recentToolCalls as any).readOnlyStreak = 0;
+          }
+          (recentToolCalls as any).readOnlyStreak = allReadOnly
+            ? (recentToolCalls as any).readOnlyStreak + 1
+            : 0;
+
+          // Also detect error-then-same-pattern (tool fails, LLM doesn't adapt)
+          const hasError = toolResults.some(tr => tr.isError);
+
+          const shouldNudge =
+            // Original: 3 identical call batches in a row
+            (recentToolCalls.length >= 3 && recentToolCalls.slice(-3).every(s => s === recentToolCalls[recentToolCalls.length - 1])) ||
+            // New: 3+ consecutive rounds of ONLY read-only tools
+            (recentToolCalls as any).readOnlyStreak >= 3 ||
+            // New: tool returned an error and the next call is still read-only (2 rounds)
+            (hasError && (recentToolCalls as any).readOnlyStreak >= 2);
+
+          if (shouldNudge) {
+            const nudge: ChatMessage = {
+              role: 'user',
+              content: '[SYSTEM] You are spinning without making progress. You are only calling read-only tools (listFiles, getDiagnostics, getSandboxStatus) or repeating the same calls. ' +
+                'STOP and ACT NOW:\n' +
+                '- Use writeFile to create source files\n' +
+                '- Use runTerminal to run shell commands (npm, npx, etc.)\n' +
+                '- Do NOT use runSandboxedCommand unless you have called createSandbox first\n' +
+                '- If a tool returned an error, follow its instructions and try an alternative tool\n' +
+                'Implement the next pending TODO item RIGHT NOW with writeFile or runTerminal.',
+            };
+            messages.push(nudge);
+            this.sessionManager.addMessage(sessionId, nudge);
+            recentToolCalls.length = 0;
+            (recentToolCalls as any).readOnlyStreak = 0;
           }
 
           // Loop back: the LLM will be called again with tool results
@@ -723,10 +754,11 @@ Rules:
     // If in sandboxed-smart-todo mode, prepend sandbox context to all prompts
     const isSandboxed = this.modeManager.isSandboxedSmartTodoMode();
     const sandboxPreamble = isSandboxed
-      ? `**SANDBOX MODE ACTIVE:** You are working inside a sandboxed environment with OS-level isolation. ` +
-        `Use runSandboxedCommand for isolated command execution. ` +
-        `Dangerous commands (sudo, pkill, killall, rm -rf /, etc.) are always blocked. ` +
-        `Create a sandbox with createSandbox for full git worktree + OS-level isolation if needed.\n\n`
+      ? `**SANDBOX MODE ACTIVE:** You are working inside a sandboxed environment. ` +
+        `Use runTerminal for running commands (it enforces software-level restrictions automatically). ` +
+        `If you need full OS-level isolation, first call createSandbox, then use runSandboxedCommand. ` +
+        `Do NOT call runSandboxedCommand unless you have called createSandbox first. ` +
+        `Dangerous commands (sudo, pkill, killall, rm -rf /, etc.) are always blocked.\n\n`
       : '';
 
     // Notify the webview that we're in smart-todo mode
@@ -810,10 +842,11 @@ Rules:
   ): Promise<void> {
     const isSandboxed = this.modeManager.isSandboxedSmartTodoMode();
     const sandboxPreamble = isSandboxed
-      ? `**SANDBOX MODE ACTIVE:** You are working inside a sandboxed environment with OS-level isolation. ` +
-        `Use runSandboxedCommand for isolated command execution. ` +
-        `Dangerous commands (sudo, pkill, killall, rm -rf /, etc.) are always blocked. ` +
-        `Create a sandbox with createSandbox for full git worktree + OS-level isolation if needed.\n\n`
+      ? `**SANDBOX MODE ACTIVE:** You are working inside a sandboxed environment. ` +
+        `Use runTerminal for running commands (it enforces software-level restrictions automatically). ` +
+        `If you need full OS-level isolation, first call createSandbox, then use runSandboxedCommand. ` +
+        `Do NOT call runSandboxedCommand unless you have called createSandbox first. ` +
+        `Dangerous commands (sudo, pkill, killall, rm -rf /, etc.) are always blocked.\n\n`
       : '';
 
     // Notify the webview we're back to planning
