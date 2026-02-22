@@ -6,6 +6,7 @@ import { Tool } from './tools/types';
 import { ReadFileTool, WriteFileTool, ListFilesTool } from './tools/file-ops';
 import { RunTerminalTool } from './tools/terminal';
 import { GetDiagnosticsTool } from './tools/diagnostics';
+import { ModeManager } from './modes/manager';
 
 let profileManager: ProfileManager;
 let registry: ProviderRegistry;
@@ -17,6 +18,10 @@ export async function activate(
   profileManager = new ProfileManager(context.globalState, context.secrets);
   registry = new ProviderRegistry(profileManager);
   await registry.initialize();
+
+  // Initialize mode manager
+  const modeManager = new ModeManager(context);
+  await modeManager.initialize();
 
   // Initialize tools
   const tools = new Map<string, Tool>();
@@ -36,6 +41,7 @@ export async function activate(
     context.extensionUri,
     registry,
     profileManager,
+    modeManager,
     tools
   );
   context.subscriptions.push(
@@ -86,7 +92,8 @@ export async function activate(
 
   context.subscriptions.push(
     { dispose: () => profileManager.dispose() },
-    { dispose: () => registry.dispose() }
+    { dispose: () => registry.dispose() },
+    { dispose: () => modeManager.dispose() }
   );
 }
 

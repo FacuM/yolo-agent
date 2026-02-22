@@ -48,6 +48,16 @@ body {
   font-size: var(--vscode-font-size);
 }
 
+#mode-select {
+  padding: 4px 8px;
+  background: var(--vscode-dropdown-background);
+  color: var(--vscode-dropdown-foreground);
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 3px;
+  font-size: var(--vscode-font-size);
+  max-width: 100px;
+}
+
 #new-chat-btn,
 #settings-btn {
   padding: 4px 10px;

@@ -30,6 +30,7 @@
   const messagesEl = document.getElementById('messages');
   const inputEl = /** @type {HTMLTextAreaElement} */ (document.getElementById('message-input'));
   const sendBtn = /** @type {HTMLButtonElement} */ (document.getElementById('send-btn'));
+  const modeSelect = /** @type {HTMLSelectElement} */ (document.getElementById('mode-select'));
   const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById('provider-select'));
   const newChatBtn = document.getElementById('new-chat-btn');
   const settingsBtn = document.getElementById('settings-btn');
@@ -61,6 +62,8 @@
   let currentAssistantText = '';
   let editingProfileId = null; // null = creating new, string = editing existing
   let profiles = [];
+  let modes = [];
+  let currentModeId = 'agent';
 
   const DEFAULT_BASE_URLS = {
     anthropic: 'https://api.anthropic.com',
@@ -71,6 +74,7 @@
   // ===== Init =====
   showEmptyState();
   vscode.postMessage({ type: 'getProviders' });
+  vscode.postMessage({ type: 'getModes' });
 
   // ===== Chat Event Listeners =====
   sendBtn.addEventListener('click', sendMessage);
@@ -84,6 +88,10 @@
 
   providerSelect.addEventListener('change', () => {
     vscode.postMessage({ type: 'switchProvider', providerId: providerSelect.value });
+  });
+
+  modeSelect.addEventListener('change', () => {
+    vscode.postMessage({ type: 'setMode', modeId: modeSelect.value });
   });
 
   newChatBtn.addEventListener('click', () => {
@@ -198,6 +206,15 @@
       // Chat messages
       case 'providers':
         updateProviderList(message.providers, message.activeProviderId);
+        break;
+      case 'modes':
+        modes = message.modes;
+        currentModeId = message.currentModeId;
+        updateModeSelector();
+        break;
+      case 'modeChanged':
+        currentModeId = message.mode.id;
+        updateModeSelector();
         break;
       case 'streamChunk':
         handleStreamChunk(message.content);
@@ -630,6 +647,17 @@
       opt.textContent = p.name;
       if (p.id === activeId) { opt.selected = true; }
       providerSelect.appendChild(opt);
+    }
+  }
+
+  function updateModeSelector() {
+    modeSelect.textContent = '';
+    for (const m of modes) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name;
+      if (m.id === currentModeId) { opt.selected = true; }
+      modeSelect.appendChild(opt);
     }
   }
 

@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import { ProviderRegistry } from '../providers/registry';
 import { ProfileManager } from '../providers/profile-manager';
 import { Tool } from '../tools/types';
+import { ModeManager } from '../modes/manager';
+import { ModeId } from '../modes/types';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'yoloAgent.chatView';
@@ -9,6 +11,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private registry: ProviderRegistry;
   private profileManager: ProfileManager;
+  private modeManager: ModeManager;
   private tools: Map<string, Tool>;
   private extensionUri: vscode.Uri;
   private conversationHistory: { role: string; content: string }[] = [];
@@ -17,11 +20,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     extensionUri: vscode.Uri,
     registry: ProviderRegistry,
     profileManager: ProfileManager,
+    modeManager: ModeManager,
     tools: Map<string, Tool>
   ) {
     this.extensionUri = extensionUri;
     this.registry = registry;
     this.profileManager = profileManager;
+    this.modeManager = modeManager;
     this.tools = tools;
   }
 
@@ -60,6 +65,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.conversationHistory = [];
           this.postMessage({ type: 'chatCleared' });
           break;
+        case 'getModes':
+          this.handleGetModes();
+          break;
+        case 'setMode':
+          if (message.modeId) {
+            await this.modeManager.setCurrentMode(message.modeId as ModeId);
+            this.postMessage({
+              type: 'modeChanged',
+              mode: this.modeManager.getCurrentMode(),
+            });
+          }
+          break;
 
         // Profile CRUD messages
         case 'getProfiles':
@@ -82,6 +99,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     // Send initial data
     this.sendProviderList();
+    this.handleGetModes();
 
     // Re-send provider list when profiles change
     this.profileManager.onDidChangeProfiles(() => {
@@ -101,19 +119,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    this.conversationHistory.push({ role: 'user', content: text });
+    // Get allowed tools based on current mode
+    const allToolNames = Array.from(this.tools.keys());
+    const allowedToolNames = this.modeManager.getAllowedTools(allToolNames);
+    const allowedTools = allowedToolNames.map(name => this.tools.get(name)!.definition);
 
-    const toolDefs = Array.from(this.tools.values()).map((t) => t.definition);
+    // Add mode system prompt
+    const modePrompt = this.modeManager.getSystemPrompt();
+
+    const userMessage = { role: 'user' as const, content: text };
+    const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
+      { role: 'system', content: modePrompt },
+      ...this.conversationHistory,
+      userMessage,
+    ];
+
+    this.conversationHistory.push({ role: 'user', content: text });
 
     try {
       const model = this.registry.getActiveModelId();
 
       const response = await provider.sendMessage(
-        this.conversationHistory.map((m) => ({
-          role: m.role as 'user' | 'assistant' | 'system',
-          content: m.content,
-        })),
-        { model, tools: toolDefs },
+        messages,
+        { model, tools: allowedTools },
         (chunk) => {
           this.postMessage({ type: 'streamChunk', content: chunk });
         }
@@ -255,6 +283,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  // --- Mode handlers ---
+
+  private handleGetModes() {
+    const modes = this.modeManager.getAllModes();
+    const currentMode = this.modeManager.getCurrentMode();
+    this.postMessage({
+      type: 'modes',
+      modes,
+      currentModeId: currentMode.id,
+    });
+  }
+
   // --- Helpers ---
 
   private sendProviderList(): void {
@@ -298,6 +338,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <!-- Chat View -->
     <div id="chat-view">
       <div id="header">
+        <select id="mode-select" title="Select mode"></select>
         <select id="provider-select" title="Select provider">
           <option value="">No providers</option>
         </select>
