@@ -16,9 +16,23 @@ interface McpConnection {
 
 export class McpClient {
   private connections: Map<string, McpConnection> = new Map();
+  private static readonly CONNECTION_TIMEOUT_MS = 15_000;
 
   /**
-   * Connect to an MCP server
+   * Wrap a promise with a timeout. Rejects if the promise doesn't settle within `ms`.
+   */
+  private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms: ${label}`)), ms);
+      promise.then(
+        (val) => { clearTimeout(timer); resolve(val); },
+        (err) => { clearTimeout(timer); reject(err); },
+      );
+    });
+  }
+
+  /**
+   * Connect to an MCP server (with timeout protection)
    */
   async connect(config: McpServerConfig): Promise<void> {
     if (this.connections.has(config.id)) {
@@ -47,7 +61,11 @@ export class McpClient {
           capabilities: {},
         });
 
-        await client.connect(transport);
+        await this.withTimeout(
+          client.connect(transport),
+          McpClient.CONNECTION_TIMEOUT_MS,
+          `connecting to "${config.name}" (stdio)`,
+        );
       } else if (config.transport === 'sse') {
         if (!config.url) {
           throw new Error('SSE transport requires a URL');
@@ -62,13 +80,21 @@ export class McpClient {
           capabilities: {},
         });
 
-        await client.connect(transport);
+        await this.withTimeout(
+          client.connect(transport),
+          McpClient.CONNECTION_TIMEOUT_MS,
+          `connecting to "${config.name}" (sse)`,
+        );
       } else {
         throw new Error(`Unsupported transport type: ${(config as any).transport}`);
       }
 
-      // Discover tools
-      const toolsResponse = await client.listTools();
+      // Discover tools (also with timeout)
+      const toolsResponse = await this.withTimeout(
+        client.listTools(),
+        McpClient.CONNECTION_TIMEOUT_MS,
+        `listing tools for "${config.name}"`,
+      );
       const tools: McpToolDefinition[] = (toolsResponse.tools || []).map(tool => ({
         name: tool.name,
         description: tool.description || '',

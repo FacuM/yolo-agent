@@ -56,14 +56,22 @@ export async function activate(
   mcpClient = new McpClient();
   mcpToolBridge = new McpToolBridge(mcpClient);
 
-  // Connect to enabled MCP servers
+  // Connect to enabled MCP servers in the background (don't block activation)
   const enabledMcpConfigs = mcpConfigManager.getEnabledConfigs();
-  for (const config of enabledMcpConfigs) {
-    try {
-      await mcpClient.connect(config);
-    } catch (error) {
-      console.error(`Failed to connect to MCP server "${config.name}":`, error);
-    }
+  if (enabledMcpConfigs.length > 0) {
+    Promise.allSettled(
+      enabledMcpConfigs.map(config =>
+        mcpClient.connect(config).catch(error => {
+          console.error(`Failed to connect to MCP server "${config.name}":`, error);
+        })
+      )
+    ).then(() => {
+      // Re-register MCP tools once connections are ready
+      const mcpToolsAfterConnect = mcpToolBridge.createToolWrappers();
+      for (const [name, tool] of mcpToolsAfterConnect) {
+        tools.set(name, tool);
+      }
+    });
   }
 
   // Update tools when MCP configs change
