@@ -5,6 +5,9 @@ import { Tool } from '../tools/types';
 import { ModeManager } from '../modes/manager';
 import { ModeId } from '../modes/types';
 import { ContextManager } from '../context/manager';
+import { McpConfigManager } from '../mcp/config';
+import { McpClient } from '../mcp/client';
+import { McpServerConfig } from '../mcp/types';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'yoloAgent.chatView';
@@ -17,6 +20,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private extensionUri: vscode.Uri;
   private conversationHistory: { role: 'user' | 'assistant'; content: string }[] = [];
   private contextManager: ContextManager;
+  private mcpConfigManager: McpConfigManager;
+  private mcpClient: McpClient;
 
   constructor(
     extensionUri: vscode.Uri,
@@ -24,7 +29,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     profileManager: ProfileManager,
     modeManager: ModeManager,
     tools: Map<string, Tool>,
-    contextManager: ContextManager
+    contextManager: ContextManager,
+    mcpConfigManager: McpConfigManager,
+    mcpClient: McpClient
   ) {
     this.extensionUri = extensionUri;
     this.registry = registry;
@@ -32,6 +39,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.modeManager = modeManager;
     this.tools = tools;
     this.contextManager = contextManager;
+    this.mcpConfigManager = mcpConfigManager;
+    this.mcpClient = mcpClient;
   }
 
   resolveWebviewView(
@@ -105,6 +114,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           break;
         case 'setSkillEnabled':
           this.handleSetSkillEnabled(message.sourcePath, message.enabled);
+          break;
+
+        // MCP messages
+        case 'getMcpServers':
+          this.handleGetMcpServers();
+          break;
+        case 'saveMcpServer':
+          await this.handleSaveMcpServer(message.server);
+          break;
+        case 'deleteMcpServer':
+          await this.handleDeleteMcpServer(message.serverId);
+          break;
+        case 'testMcpConnection':
+          await this.handleTestMcpConnection(message.server);
           break;
       }
     });
@@ -336,6 +359,68 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.handleGetContext();
   }
 
+  // --- MCP handlers ---
+
+  private handleGetMcpServers() {
+    const servers = this.mcpConfigManager.getConfigs();
+    const serverList = servers.map(s => ({
+      ...s,
+      connected: this.mcpClient.isConnected(s.id),
+    }));
+    this.postMessage({
+      type: 'mcpServers',
+      servers: serverList,
+    });
+  }
+
+  private async handleSaveMcpServer(server: McpServerConfig) {
+    try {
+      await this.mcpConfigManager.saveConfig(server);
+      this.postMessage({ type: 'mcpServerSaved', server });
+      await this.handleGetMcpServers();
+    } catch (err) {
+      this.postMessage({
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async handleDeleteMcpServer(serverId: string) {
+    try {
+      await this.mcpConfigManager.deleteConfig(serverId);
+      this.postMessage({ type: 'mcpServerDeleted', serverId });
+      await this.handleGetMcpServers();
+    } catch (err) {
+      this.postMessage({
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async handleTestMcpConnection(server: McpServerConfig) {
+    try {
+      // Test connection by creating a temporary client
+      const testClient = new McpClient();
+      await testClient.connect(server);
+      const tools = testClient.getToolsForServer(server.id);
+      await testClient.disconnect(server.id);
+
+      this.postMessage({
+        type: 'mcpConnectionTest',
+        success: true,
+        toolCount: tools.length,
+      });
+    } catch (err) {
+      this.postMessage({
+        type: 'mcpConnectionTest',
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   // --- Helpers ---
 
   private sendProviderList(): void {
@@ -400,9 +485,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <button id="settings-back-btn" title="Back to chat">\u2190</button>
         <span class="header-title">Settings</span>
       </div>
+      <div id="settings-tabs">
+        <button id="tab-providers" class="tab-btn active">Providers</button>
+        <button id="tab-mcp" class="tab-btn">MCP Servers</button>
+      </div>
       <div id="settings-content">
-        <div id="profiles-list"></div>
-        <button id="add-profile-btn" class="primary-btn">+ Add Provider</button>
+        <div id="providers-panel">
+          <div id="profiles-list"></div>
+          <button id="add-profile-btn" class="primary-btn">+ Add Provider</button>
+        </div>
+        <div id="mcp-panel" class="hidden">
+          <div id="mcp-servers-inline-list"></div>
+          <button id="mcp-settings-btn" class="primary-btn">Manage MCP Servers</button>
+        </div>
       </div>
     </div>
 
@@ -475,6 +570,71 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <div id="context-agents-section">
           <h3>AGENTS.md Files</h3>
           <div id="context-agents-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MCP Server List View (nested in Settings) -->
+    <div id="mcp-view" class="hidden">
+      <div id="mcp-header">
+        <button id="mcp-back-btn" title="Back to settings">\u2190</button>
+        <span class="header-title">MCP Servers</span>
+      </div>
+      <div id="mcp-content">
+        <div id="mcp-servers-list"></div>
+        <button id="add-mcp-server-btn" class="primary-btn">+ Add MCP Server</button>
+      </div>
+    </div>
+
+    <!-- MCP Server Editor View -->
+    <div id="mcp-editor-view" class="hidden">
+      <div id="mcp-editor-header">
+        <button id="mcp-editor-back-btn" title="Back to MCP servers">\u2190</button>
+        <span id="mcp-editor-title" class="header-title">Add MCP Server</span>
+      </div>
+      <div id="mcp-editor-content">
+        <div class="form-group">
+          <label for="mcp-name">Name</label>
+          <input type="text" id="mcp-name" placeholder="e.g., filesystem">
+        </div>
+        <div class="form-group">
+          <label for="mcp-transport">Transport</label>
+          <select id="mcp-transport">
+            <option value="stdio">STDIO</option>
+            <option value="sse">SSE</option>
+          </select>
+        </div>
+        <div id="mcp-stdio-group">
+          <div class="form-group">
+            <label for="mcp-command">Command</label>
+            <input type="text" id="mcp-command" placeholder="e.g., npx">
+          </div>
+          <div class="form-group">
+            <label for="mcp-args">Arguments (space-separated)</label>
+            <input type="text" id="mcp-args" placeholder="e.g., @modelcontextprotocol/server-filesystem">
+          </div>
+        </div>
+        <div id="mcp-sse-group" class="hidden">
+          <div class="form-group">
+            <label for="mcp-url">URL</label>
+            <input type="text" id="mcp-url" placeholder="https://example.com/sse">
+          </div>
+        </div>
+        <div class="form-group checkbox-group">
+          <label>
+            <input type="checkbox" id="mcp-enabled" checked>
+            Enabled
+          </label>
+        </div>
+        <div class="editor-actions">
+          <button id="test-mcp-btn" class="secondary-btn">Test Connection</button>
+        </div>
+        <div class="editor-actions">
+          <button id="save-mcp-btn" class="primary-btn">Save</button>
+          <button id="cancel-mcp-btn" class="secondary-btn">Cancel</button>
+        </div>
+        <div id="delete-mcp-area" class="hidden">
+          <button id="delete-mcp-btn" class="danger-btn">Delete Server</button>
         </div>
       </div>
     </div>

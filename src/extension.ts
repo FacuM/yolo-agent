@@ -8,9 +8,15 @@ import { RunTerminalTool } from './tools/terminal';
 import { GetDiagnosticsTool } from './tools/diagnostics';
 import { ModeManager } from './modes/manager';
 import { ContextManager } from './context/manager';
+import { McpConfigManager } from './mcp/config';
+import { McpClient } from './mcp/client';
+import { McpToolBridge } from './mcp/bridge';
 
 let profileManager: ProfileManager;
 let registry: ProviderRegistry;
+let mcpConfigManager: McpConfigManager;
+let mcpClient: McpClient;
+let mcpToolBridge: McpToolBridge;
 
 export async function activate(
   context: vscode.ExtensionContext
@@ -28,6 +34,41 @@ export async function activate(
   const contextManager = new ContextManager();
   await contextManager.initialize();
 
+  // Initialize MCP components
+  mcpConfigManager = new McpConfigManager(context.globalState, vscode.workspace.workspaceFolders || []);
+  await mcpConfigManager.initialize();
+  mcpClient = new McpClient();
+  mcpToolBridge = new McpToolBridge(mcpClient);
+
+  // Connect to enabled MCP servers
+  const enabledMcpConfigs = mcpConfigManager.getEnabledConfigs();
+  for (const config of enabledMcpConfigs) {
+    try {
+      await mcpClient.connect(config);
+    } catch (error) {
+      console.error(`Failed to connect to MCP server "${config.name}":`, error);
+    }
+  }
+
+  // Update tools when MCP configs change
+  mcpConfigManager.onDidChange(async () => {
+    // Disconnect from all servers
+    await mcpClient.disconnectAll();
+
+    // Reconnect to enabled servers
+    const enabledConfigs = mcpConfigManager.getEnabledConfigs();
+    for (const config of enabledConfigs) {
+      try {
+        await mcpClient.connect(config);
+      } catch (error) {
+        console.error(`Failed to connect to MCP server "${config.name}":`, error);
+      }
+    }
+
+    // Notify webview to refresh MCP tools
+    vscode.commands.executeCommand('yoloAgent.chatView.focus');
+  });
+
   // Initialize tools
   const tools = new Map<string, Tool>();
   const toolInstances: Tool[] = [
@@ -41,6 +82,12 @@ export async function activate(
     tools.set(tool.definition.name, tool);
   }
 
+  // Add MCP tools
+  const mcpTools = mcpToolBridge.createToolWrappers();
+  for (const [name, tool] of mcpTools) {
+    tools.set(name, tool);
+  }
+
   // Register webview sidebar provider
   const chatViewProvider = new ChatViewProvider(
     context.extensionUri,
@@ -48,7 +95,9 @@ export async function activate(
     profileManager,
     modeManager,
     tools,
-    contextManager
+    contextManager,
+    mcpConfigManager,
+    mcpClient
   );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -100,7 +149,8 @@ export async function activate(
     { dispose: () => profileManager.dispose() },
     { dispose: () => registry.dispose() },
     { dispose: () => modeManager.dispose() },
-    { dispose: () => contextManager.dispose() }
+    { dispose: () => contextManager.dispose() },
+    { dispose: async () => { await mcpClient.disconnectAll(); mcpConfigManager.dispose(); } }
   );
 }
 

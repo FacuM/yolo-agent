@@ -17,8 +17,10 @@
   const settingsView = document.getElementById('settings-view');
   const editorView = document.getElementById('editor-view');
   const contextView = document.getElementById('context-view');
+  const mcpView = document.getElementById('mcp-view');
+  const mcpEditorView = document.getElementById('mcp-editor-view');
 
-  let currentView = 'chat'; // 'chat' | 'settings' | 'editor' | 'context'
+  let currentView = 'chat'; // 'chat' | 'settings' | 'editor' | 'context' | 'mcp' | 'mcp-editor'
 
   function showView(view) {
     currentView = view;
@@ -26,6 +28,8 @@
     settingsView.classList.toggle('hidden', view !== 'settings');
     editorView.classList.toggle('hidden', view !== 'editor');
     contextView.classList.toggle('hidden', view !== 'context');
+    mcpView.classList.toggle('hidden', view !== 'mcp');
+    mcpEditorView.classList.toggle('hidden', view !== 'mcp-editor');
   }
 
   // ===== Chat View Elements =====
@@ -64,6 +68,36 @@
   const deleteProfileArea = document.getElementById('delete-profile-area');
   const deleteProfileBtn = document.getElementById('delete-profile-btn');
 
+  // ===== Settings Tabs =====
+  const tabProviders = document.getElementById('tab-providers');
+  const tabMcp = document.getElementById('tab-mcp');
+  const providersPanel = document.getElementById('providers-panel');
+  const mcpPanel = document.getElementById('mcp-panel');
+  const mcpSettingsBtn = document.getElementById('mcp-settings-btn');
+  const mcpServersInlineList = document.getElementById('mcp-servers-inline-list');
+
+  // ===== MCP View Elements =====
+  const mcpBackBtn = document.getElementById('mcp-back-btn');
+  const mcpServersList = document.getElementById('mcp-servers-list');
+  const addMcpServerBtn = document.getElementById('add-mcp-server-btn');
+
+  // ===== MCP Editor Elements =====
+  const mcpEditorBackBtn = document.getElementById('mcp-editor-back-btn');
+  const mcpEditorTitle = document.getElementById('mcp-editor-title');
+  const mcpNameInput = /** @type {HTMLInputElement} */ (document.getElementById('mcp-name'));
+  const mcpTransportSelect = /** @type {HTMLSelectElement} */ (document.getElementById('mcp-transport'));
+  const mcpStdioGroup = document.getElementById('mcp-stdio-group');
+  const mcpSseGroup = document.getElementById('mcp-sse-group');
+  const mcpCommandInput = /** @type {HTMLInputElement} */ (document.getElementById('mcp-command'));
+  const mcpArgsInput = /** @type {HTMLInputElement} */ (document.getElementById('mcp-args'));
+  const mcpUrlInput = /** @type {HTMLInputElement} */ (document.getElementById('mcp-url'));
+  const mcpEnabledInput = /** @type {HTMLInputElement} */ (document.getElementById('mcp-enabled'));
+  const testMcpBtn = document.getElementById('test-mcp-btn');
+  const saveMcpBtn = document.getElementById('save-mcp-btn');
+  const cancelMcpBtn = document.getElementById('cancel-mcp-btn');
+  const deleteMcpArea = document.getElementById('delete-mcp-area');
+  const deleteMcpBtn = document.getElementById('delete-mcp-btn');
+
   // ===== State =====
   let isStreaming = false;
   let currentAssistantEl = null;
@@ -74,6 +108,8 @@
   let currentModeId = 'agent';
   let contextSkills = [];
   let contextAgentsMd = [];
+  let mcpServers = [];
+  let editingMcpServerId = null;
 
   const DEFAULT_BASE_URLS = {
     anthropic: 'https://api.anthropic.com',
@@ -86,6 +122,7 @@
   vscode.postMessage({ type: 'getProviders' });
   vscode.postMessage({ type: 'getModes' });
   vscode.postMessage({ type: 'getContext' });
+  vscode.postMessage({ type: 'getMcpServers' });
 
   // ===== Chat Event Listeners =====
   sendBtn.addEventListener('click', sendMessage);
@@ -122,6 +159,27 @@
   // ===== Settings Event Listeners =====
   settingsBackBtn.addEventListener('click', () => {
     showView('chat');
+  });
+
+  // Settings tabs
+  tabProviders.addEventListener('click', () => {
+    tabProviders.classList.add('active');
+    tabMcp.classList.remove('active');
+    providersPanel.classList.remove('hidden');
+    mcpPanel.classList.add('hidden');
+  });
+
+  tabMcp.addEventListener('click', () => {
+    tabMcp.classList.add('active');
+    tabProviders.classList.remove('active');
+    mcpPanel.classList.remove('hidden');
+    providersPanel.classList.add('hidden');
+    vscode.postMessage({ type: 'getMcpServers' });
+  });
+
+  mcpSettingsBtn.addEventListener('click', () => {
+    showView('mcp');
+    vscode.postMessage({ type: 'getMcpServers' });
   });
 
   // ===== Context Event Listeners =====
@@ -219,6 +277,73 @@
     }
   });
 
+  // ===== MCP Event Listeners =====
+  mcpBackBtn.addEventListener('click', () => {
+    showView('settings');
+  });
+
+  addMcpServerBtn.addEventListener('click', () => {
+    openMcpEditor(null);
+  });
+
+  mcpEditorBackBtn.addEventListener('click', () => {
+    showView('mcp');
+  });
+
+  mcpTransportSelect.addEventListener('change', () => {
+    const transport = mcpTransportSelect.value;
+    if (transport === 'stdio') {
+      mcpStdioGroup.classList.remove('hidden');
+      mcpSseGroup.classList.add('hidden');
+    } else {
+      mcpStdioGroup.classList.add('hidden');
+      mcpSseGroup.classList.remove('hidden');
+    }
+  });
+
+  testMcpBtn.addEventListener('click', () => {
+    const server = buildMcpServerFromForm();
+    if (!server.name) {
+      mcpNameInput.focus();
+      return;
+    }
+    vscode.postMessage({
+      type: 'testMcpConnection',
+      server: server,
+    });
+  });
+
+  saveMcpBtn.addEventListener('click', () => {
+    const server = buildMcpServerFromForm();
+    if (!server.name) {
+      mcpNameInput.focus();
+      return;
+    }
+    vscode.postMessage({
+      type: 'saveMcpServer',
+      server: server,
+    });
+  });
+
+  cancelMcpBtn.addEventListener('click', () => {
+    showView('mcp');
+  });
+
+  deleteMcpBtn.addEventListener('click', () => {
+    if (!editingMcpServerId) { return; }
+    if (deleteMcpBtn.dataset.confirmed === 'true') {
+      vscode.postMessage({ type: 'deleteMcpServer', serverId: editingMcpServerId });
+      showView('mcp');
+    } else {
+      deleteMcpBtn.textContent = 'Click again to confirm deletion';
+      deleteMcpBtn.dataset.confirmed = 'true';
+      setTimeout(() => {
+        deleteMcpBtn.textContent = 'Delete Server';
+        deleteMcpBtn.dataset.confirmed = 'false';
+      }, 3000);
+    }
+  });
+
   // ===== Message handling from extension =====
   window.addEventListener('message', (event) => {
     const message = event.data;
@@ -284,6 +409,27 @@
         contextSkills = message.skills || [];
         contextAgentsMd = message.agentsMd || [];
         renderContextPanel();
+        break;
+
+      // MCP messages
+      case 'mcpServers':
+        mcpServers = message.servers || [];
+        renderMcpServersList(message.servers || []);
+        renderMcpServersInlineList(message.servers || []);
+        break;
+      case 'mcpServerSaved':
+        showView('mcp');
+        vscode.postMessage({ type: 'getMcpServers' });
+        break;
+      case 'mcpServerDeleted':
+        vscode.postMessage({ type: 'getMcpServers' });
+        break;
+      case 'mcpConnectionTest':
+        if (message.success) {
+          alert('Connection successful! Found ' + message.toolCount + ' tools.');
+        } else {
+          alert('Connection failed: ' + (message.error || 'Unknown error'));
+        }
         break;
     }
   });
@@ -880,5 +1026,160 @@
 
       contextAgentsList.appendChild(card);
     }
+  }
+
+  // ===== MCP Functions =====
+
+  function renderMcpServersList(servers) {
+    mcpServersList.textContent = '';
+
+    if (servers.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'settings-empty';
+      empty.textContent = 'No MCP servers configured';
+      mcpServersList.appendChild(empty);
+      return;
+    }
+
+    for (const server of servers) {
+      const card = document.createElement('div');
+      card.className = 'mcp-server-card';
+
+      const status = document.createElement('div');
+      status.className = 'mcp-status ' + (server.connected ? 'connected' : 'disconnected');
+      status.title = server.connected ? 'Connected' : 'Disconnected';
+
+      const info = document.createElement('div');
+      info.className = 'mcp-info';
+
+      const name = document.createElement('div');
+      name.className = 'mcp-name';
+      name.textContent = server.name;
+
+      const transport = document.createElement('span');
+      transport.className = 'mcp-badge';
+      transport.textContent = server.transport.toUpperCase();
+
+      info.appendChild(name);
+      info.appendChild(transport);
+
+      const actions = document.createElement('div');
+      actions.className = 'mcp-actions';
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '\u270E';
+      editBtn.title = 'Edit';
+      editBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openMcpEditor(server);
+      });
+
+      actions.appendChild(editBtn);
+
+      card.appendChild(status);
+      card.appendChild(info);
+      card.appendChild(actions);
+
+      card.addEventListener('click', () => {
+        openMcpEditor(server);
+      });
+
+      mcpServersList.appendChild(card);
+    }
+  }
+
+  function renderMcpServersInlineList(servers) {
+    mcpServersInlineList.textContent = '';
+
+    if (servers.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'settings-empty';
+      empty.textContent = 'No MCP servers configured';
+      mcpServersInlineList.appendChild(empty);
+      return;
+    }
+
+    for (const server of servers) {
+      const card = document.createElement('div');
+      card.className = 'mcp-server-card';
+
+      const status = document.createElement('div');
+      status.className = 'mcp-status ' + (server.connected ? 'connected' : 'disconnected');
+      status.title = server.connected ? 'Connected' : 'Disconnected';
+
+      const info = document.createElement('div');
+      info.className = 'mcp-info';
+
+      const name = document.createElement('div');
+      name.className = 'mcp-name';
+      name.textContent = server.name;
+
+      const transport = document.createElement('span');
+      transport.className = 'mcp-badge';
+      transport.textContent = server.transport.toUpperCase();
+
+      info.appendChild(name);
+      info.appendChild(transport);
+
+      card.appendChild(status);
+      card.appendChild(info);
+
+      mcpServersInlineList.appendChild(card);
+    }
+  }
+
+  function openMcpEditor(server) {
+    editingMcpServerId = server ? server.id : null;
+    mcpEditorTitle.textContent = server ? 'Edit MCP Server' : 'Add MCP Server';
+
+    // Reset form
+    mcpNameInput.value = server ? server.name : '';
+    mcpTransportSelect.value = server ? server.transport : 'stdio';
+    mcpCommandInput.value = server ? (server.command || '') : 'npx';
+    mcpArgsInput.value = server ? (server.args ? server.args.join(' ') : '') : '';
+    mcpUrlInput.value = server ? (server.url || '') : '';
+    mcpEnabledInput.checked = server ? server.enabled : true;
+
+    // Show correct transport fields
+    const transport = server ? server.transport : 'stdio';
+    if (transport === 'stdio') {
+      mcpStdioGroup.classList.remove('hidden');
+      mcpSseGroup.classList.add('hidden');
+    } else {
+      mcpStdioGroup.classList.add('hidden');
+      mcpSseGroup.classList.remove('hidden');
+    }
+
+    // Show/hide delete
+    if (server) {
+      deleteMcpArea.classList.remove('hidden');
+      deleteMcpBtn.textContent = 'Delete Server';
+      deleteMcpBtn.dataset.confirmed = 'false';
+    } else {
+      deleteMcpArea.classList.add('hidden');
+    }
+
+    showView('mcp-editor');
+    mcpNameInput.focus();
+  }
+
+  function buildMcpServerFromForm() {
+    const transport = mcpTransportSelect.value;
+    const server = {
+      id: editingMcpServerId || 'mcp-' + Date.now(),
+      name: mcpNameInput.value.trim(),
+      transport: transport,
+      enabled: mcpEnabledInput.checked,
+    };
+
+    if (transport === 'stdio') {
+      server.command = mcpCommandInput.value.trim();
+      const argsStr = mcpArgsInput.value.trim();
+      server.args = argsStr ? argsStr.split(/\s+/) : [];
+    } else {
+      server.url = mcpUrlInput.value.trim();
+    }
+
+    return server;
   }
 })();
