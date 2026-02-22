@@ -583,46 +583,78 @@ Rules:
           // If aborted during tool execution, break out immediately
           if (abortCtrl.signal.aborted) { break; }
 
-          // ── Loop detection: catch both identical calls AND read-only tool spinning ──
+          // ── Loop detection: catch identical calls, read-only spinning, AND error-retry cycling ──
           const READ_ONLY_TOOLS = new Set(['listFiles', 'readFile', 'getDiagnostics', 'getSandboxStatus']);
           const callSigs = response.toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`).join('|');
-          const allReadOnly = response.toolCalls.every(tc => READ_ONLY_TOOLS.has(tc.name));
           recentToolCalls.push(callSigs);
 
-          // Track consecutive read-only iterations
-          if (!('readOnlyStreak' in recentToolCalls)) {
-            (recentToolCalls as any).readOnlyStreak = 0;
+          // Lazily initialize tracking state on the array
+          if (!('nonProductiveStreak' in recentToolCalls)) {
+            (recentToolCalls as any).nonProductiveStreak = 0;
+            (recentToolCalls as any).toolErrorCounts = {} as Record<string, number>;
           }
-          (recentToolCalls as any).readOnlyStreak = allReadOnly
-            ? (recentToolCalls as any).readOnlyStreak + 1
-            : 0;
 
-          // Also detect error-then-same-pattern (tool fails, LLM doesn't adapt)
           const hasError = toolResults.some(tr => tr.isError);
 
+          // Build a per-tool error map for this round
+          const errorToolNames = new Set<string>();
+          for (let i = 0; i < response.toolCalls.length; i++) {
+            if (toolResults[i]?.isError) {
+              const name = response.toolCalls[i].name;
+              errorToolNames.add(name);
+              const counts = (recentToolCalls as any).toolErrorCounts as Record<string, number>;
+              counts[name] = (counts[name] ?? 0) + 1;
+            }
+          }
+
+          // A round is "non-productive" if EVERY tool call either errored or is read-only.
+          // This catches the cycling pattern: runSandboxedCommand(error) → listFiles(ok) → repeat
+          const allNonProductive = response.toolCalls.every((tc, i) =>
+            READ_ONLY_TOOLS.has(tc.name) || toolResults[i]?.isError
+          );
+          (recentToolCalls as any).nonProductiveStreak = allNonProductive
+            ? (recentToolCalls as any).nonProductiveStreak + 1
+            : 0;
+
+          // Find tools that have errored 2+ times (LLM keeps retrying a broken tool)
+          const repeatedErrorTools = Object.entries(
+            (recentToolCalls as any).toolErrorCounts as Record<string, number>
+          ).filter(([, count]) => count >= 2).map(([name]) => name);
+
           const shouldNudge =
-            // Original: 3 identical call batches in a row
+            // 3 identical call batches in a row
             (recentToolCalls.length >= 3 && recentToolCalls.slice(-3).every(s => s === recentToolCalls[recentToolCalls.length - 1])) ||
-            // New: 3+ consecutive rounds of ONLY read-only tools
-            (recentToolCalls as any).readOnlyStreak >= 3 ||
-            // New: tool returned an error and the next call is still read-only (2 rounds)
-            (hasError && (recentToolCalls as any).readOnlyStreak >= 2);
+            // 3+ consecutive non-productive rounds (read-only, errors, or mix of both)
+            (recentToolCalls as any).nonProductiveStreak >= 3 ||
+            // Any tool has errored 2+ times — LLM isn't adapting to the error
+            repeatedErrorTools.length > 0;
 
           if (shouldNudge) {
+            // Build a targeted nudge message
+            let nudgeBody = '[SYSTEM] You are spinning without making progress. ';
+            if (repeatedErrorTools.length > 0) {
+              const toolList = repeatedErrorTools.join(', ');
+              nudgeBody += `The following tool(s) have FAILED multiple times: ${toolList}. STOP using them and try alternatives. `;
+              if (repeatedErrorTools.includes('runSandboxedCommand')) {
+                nudgeBody += 'runSandboxedCommand requires createSandbox first — use runTerminal instead. ';
+              }
+            }
+            nudgeBody += 'STOP and ACT NOW:\n' +
+              '- Use writeFile to create source files\n' +
+              '- Use runTerminal to run shell commands (npm, npx, etc.)\n' +
+              '- Do NOT use runSandboxedCommand unless you have called createSandbox first\n' +
+              '- If a tool returned an error, STOP calling it and try an alternative tool\n' +
+              'Implement the next pending TODO item RIGHT NOW with writeFile or runTerminal.';
+
             const nudge: ChatMessage = {
               role: 'user',
-              content: '[SYSTEM] You are spinning without making progress. You are only calling read-only tools (listFiles, getDiagnostics, getSandboxStatus) or repeating the same calls. ' +
-                'STOP and ACT NOW:\n' +
-                '- Use writeFile to create source files\n' +
-                '- Use runTerminal to run shell commands (npm, npx, etc.)\n' +
-                '- Do NOT use runSandboxedCommand unless you have called createSandbox first\n' +
-                '- If a tool returned an error, follow its instructions and try an alternative tool\n' +
-                'Implement the next pending TODO item RIGHT NOW with writeFile or runTerminal.',
+              content: nudgeBody,
             };
             messages.push(nudge);
             this.sessionManager.addMessage(sessionId, nudge);
             recentToolCalls.length = 0;
-            (recentToolCalls as any).readOnlyStreak = 0;
+            (recentToolCalls as any).nonProductiveStreak = 0;
+            (recentToolCalls as any).toolErrorCounts = {};
           }
 
           // Loop back: the LLM will be called again with tool results
