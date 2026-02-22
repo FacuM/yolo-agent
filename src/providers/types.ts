@@ -34,6 +34,7 @@ export interface RequestOptions {
 export interface LLMResponse {
   content: string;
   toolCalls?: ToolCall[];
+  thinking?: string;  // Extended thinking or reasoning content
   usage?: {
     inputTokens: number;
     outputTokens: number;
