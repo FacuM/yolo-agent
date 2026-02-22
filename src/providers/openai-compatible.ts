@@ -41,7 +41,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new Error(`API key not set for ${this.name}`);
     }
 
-    const openaiMessages = messages.map((m) => this.toOpenAIMessage(m));
+    const openaiMessages = messages.flatMap((m) => this.toOpenAIMessages(m));
 
     const tools = options.tools?.map((t) => ({
       type: 'function' as const,
@@ -159,23 +159,27 @@ export class OpenAICompatibleProvider implements LLMProvider {
     }
   }
 
-  private toOpenAIMessage(
+  /**
+   * Convert one ChatMessage into one or more OpenAI messages.
+   * Tool-result messages may expand to multiple `tool` role messages.
+   */
+  private toOpenAIMessages(
     msg: ChatMessage
-  ): OpenAI.ChatCompletionMessageParam {
+  ): OpenAI.ChatCompletionMessageParam[] {
     if (msg.role === 'system') {
-      return { role: 'system', content: msg.content };
+      return [{ role: 'system', content: msg.content }];
     }
 
     if (msg.toolResults && msg.toolResults.length > 0) {
-      return {
-        role: 'tool',
-        tool_call_id: msg.toolResults[0].toolCallId,
-        content: msg.toolResults[0].content,
-      };
+      return msg.toolResults.map((tr) => ({
+        role: 'tool' as const,
+        tool_call_id: tr.toolCallId,
+        content: tr.content,
+      }));
     }
 
     if (msg.role === 'assistant' && msg.toolCalls) {
-      return {
+      return [{
         role: 'assistant',
         content: msg.content || null,
         tool_calls: msg.toolCalls.map((tc) => ({
@@ -186,12 +190,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
             arguments: JSON.stringify(tc.arguments),
           },
         })),
-      };
+      }];
     }
 
-    return {
+    return [{
       role: msg.role,
       content: msg.content,
-    };
+    }];
   }
 }

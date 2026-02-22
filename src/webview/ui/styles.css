@@ -242,6 +242,41 @@ body {
   display: block;
 }
 
+.tool-call-section {
+  padding: 6px 8px;
+}
+
+.tool-call-section + .tool-call-section {
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+.tool-call-section-label {
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 4px;
+}
+
+.tool-call-input .tool-call-section-label {
+  color: var(--vscode-textLink-foreground);
+}
+
+.tool-call-section-body {
+  margin: 0;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.tool-call-section-body.error {
+  color: var(--vscode-errorForeground);
+}
+
 /* Question cards (askQuestion tool) */
 .question-card {
   margin: 8px 0;

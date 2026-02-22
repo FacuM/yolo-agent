@@ -478,7 +478,7 @@
         handleThinking(message.content);
         break;
       case 'toolCallStarted':
-        handleToolCallStarted(message.name, message.id);
+        handleToolCallStarted(message.name, message.id, message.arguments);
         break;
       case 'toolCallResult':
         handleToolCallResult(message.id, message.name, message.content, message.isError);
@@ -1450,9 +1450,15 @@
         header[HANDLER_PROPERTY] = toggleHandler;
         header.addEventListener('click', toggleHandler);
       }
-      const contentEl = card.querySelector('.tool-call-content');
-      if (contentEl) {
-        contentEl.textContent = content;
+      // Update the output section body
+      const outputBody = card.querySelector('.tool-call-output .tool-call-section-body');
+      if (outputBody) {
+        outputBody.textContent = content;
+        if (isError) { outputBody.classList.add('error'); }
+      } else {
+        // Fallback: old-style content element
+        const contentEl = card.querySelector('.tool-call-content');
+        if (contentEl) { contentEl.textContent = content; }
       }
     }
     scrollToBottom();

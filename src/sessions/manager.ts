@@ -1,10 +1,13 @@
 import { randomUUID } from 'crypto';
+import { ToolCall, ToolResult } from '../providers/types';
 
 export type SessionStatus = 'idle' | 'busy' | 'error';
 
 export interface SessionMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  toolCalls?: ToolCall[];
+  toolResults?: ToolResult[];
 }
 
 /**

@@ -9,6 +9,7 @@ import { McpConfigManager } from '../mcp/config';
 import { McpClient } from '../mcp/client';
 import { McpServerConfig } from '../mcp/types';
 import { SessionManager, BufferedMessage, TodoItem, TodoItemStatus, SmartTodoPlan } from '../sessions/manager';
+import { ChatMessage, ToolResult as ProviderToolResult } from '../providers/types';
 import { AskQuestionTool } from '../tools/question';
 import { SandboxManager } from '../sandbox/manager';
 
@@ -52,11 +53,16 @@ For trivial requests, a single TODO is fine — do NOT over-split.`;
 {PLAN}
 
 **Instructions:**
-- Work through the TODO items in order.
-- Use the available tools to read, write, and run commands as needed.
-- After completing each item, mention which TODO you just finished.
+- Work through the TODO items IN ORDER, starting with the first pending item.
+- IMMEDIATELY start creating files and running commands. Do NOT spend time listing files or diagnosing — ACT.
+- Use writeFile to create and edit source files.
+- Use runTerminal to run shell commands (npm, npx, git, build tools, etc.).
+- Use readFile / listFiles only when you need to read EXISTING code you haven't seen yet.
+- After completing each item, say "TODO N: DONE" and move to the next one.
 - Do NOT skip items. If one depends on another, complete the dependency first.
-- When you finish all items, say "ALL TODOS COMPLETE".`;
+- When you finish all items, say "ALL TODOS COMPLETE".
+
+CRITICAL: You have full tool access. Start writing code and running commands right away. Do NOT loop on listFiles or getDiagnostics without producing files.`;
 
   private static readonly SMART_TODO_VERIFY_PROMPT = `You are a QA verification assistant. You were given a plan and the AI attempted to complete it. Now verify the work.
 
@@ -84,6 +90,9 @@ Rules:
 - Use IN-PROGRESS if partially done.
 - After the verification block, summarize: which items pass, which need work.
 - If all items are DONE, end with "ALL TODOS VERIFIED".`;
+
+  /** Maximum tool-call ↔ LLM iterations within a single round */
+  private static readonly MAX_TOOL_ITERATIONS = 25;
 
   // ===== Instance fields =====
 
@@ -423,7 +432,7 @@ Rules:
     }
 
     const history = this.sessionManager.getHistory(sessionId);
-    const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
+    const messages: ChatMessage[] = [
       { role: 'system', content: modePrompt },
       ...history,
       { role: 'user', content: userText },
@@ -439,103 +448,166 @@ Rules:
     let firstChunkReceived = false;
     try {
       const model = this.registry.getActiveModelId();
-
-      this.postSessionMessage(sessionId, { type: 'waitingForApi' });
-
-      const response = await provider.sendMessage(
-        messages,
-        { model, tools: allowedTools, signal: abortCtrl.signal },
-        (chunk) => {
-          if (!firstChunkReceived) {
-            firstChunkReceived = true;
-            this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
-          }
-          this.postSessionMessage(sessionId, { type: 'streamChunk', content: chunk });
+      const requestOpts = { model, tools: allowedTools, signal: abortCtrl.signal };
+      const onChunk = (chunk: string) => {
+        if (!firstChunkReceived) {
+          firstChunkReceived = true;
+          this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
         }
-      );
-      if (!firstChunkReceived) {
-        this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
-      }
+        this.postSessionMessage(sessionId, { type: 'streamChunk', content: chunk });
+      };
 
-      if (response.thinking) {
-        this.postSessionMessage(sessionId, { type: 'thinking', content: response.thinking });
-      }
+      let toolIteration = 0;
+      let keepLooping = true;
+      const recentToolCalls: string[] = []; // Track recent tool signatures for loop detection
 
-      if (response.toolCalls && response.toolCalls.length > 0) {
-        for (const toolCall of response.toolCalls) {
-          this.postSessionMessage(sessionId, {
-            type: 'toolCallStarted',
-            name: toolCall.name,
-            id: toolCall.id,
-          });
+      while (keepLooping) {
+        // Check abort before each provider call
+        if (abortCtrl.signal.aborted) { break; }
 
-          // Emit file activity for sandbox progress tracking
-          this.emitFileActivity(sessionId, toolCall.name, toolCall.arguments);
+        // Reset streaming state for each LLM call so UI shows waiting indicator
+        firstChunkReceived = false;
+        this.postSessionMessage(sessionId, { type: 'waitingForApi' });
 
-          const tool = this.tools.get(toolCall.name);
-          if (tool) {
-            // Special handling for askQuestion: post the question to the webview
-            // before executing (execute() will block until the user answers)
-            if (toolCall.name === 'askQuestion') {
-              this.postSessionMessage(sessionId, {
-                type: 'askQuestion',
-                question: (toolCall.arguments.question as string) || 'The assistant has a question for you.',
-                toolCallId: toolCall.id,
-              });
-            }
+        const response = await provider.sendMessage(messages, requestOpts, onChunk);
+        if (!firstChunkReceived) {
+          this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
+        }
+        if (!firstChunkReceived) {
+          this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
+        }
 
-            // Validate required parameters before execution
-            const validationError = this.validateToolParams(tool, toolCall.arguments);
-            if (validationError) {
-              this.postSessionMessage(sessionId, {
-                type: 'toolCallResult',
-                id: toolCall.id,
-                name: toolCall.name,
-                content: validationError,
-                isError: true,
-              });
-              continue;
-            }
+        if (response.thinking) {
+          this.postSessionMessage(sessionId, { type: 'thinking', content: response.thinking });
+        }
 
-            try {
-              const result = await tool.execute(toolCall.arguments);
-              this.postSessionMessage(sessionId, {
-                type: 'toolCallResult',
-                id: toolCall.id,
-                name: toolCall.name,
-                content: result.content,
-                isError: result.isError,
-              });
-            } catch (toolErr) {
-              this.postSessionMessage(sessionId, {
-                type: 'toolCallResult',
-                id: toolCall.id,
-                name: toolCall.name,
-                content: `Tool execution error: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`,
-                isError: true,
-              });
-            }
-          } else {
+        // ── If the LLM requested tool calls, execute & feed results back ──
+        if (response.toolCalls && response.toolCalls.length > 0 && toolIteration < ChatViewProvider.MAX_TOOL_ITERATIONS) {
+          toolIteration++;
+
+          // Store assistant turn (with tool-call metadata) in conversation + history
+          const assistantMsg: ChatMessage = {
+            role: 'assistant',
+            content: response.content ?? '',
+            toolCalls: response.toolCalls,
+          };
+          messages.push(assistantMsg);
+          this.sessionManager.addMessage(sessionId, assistantMsg);
+
+          // Execute each tool and collect results
+          const toolResults: ProviderToolResult[] = [];
+          for (const toolCall of response.toolCalls) {
             this.postSessionMessage(sessionId, {
-              type: 'toolCallResult',
-              id: toolCall.id,
+              type: 'toolCallStarted',
               name: toolCall.name,
-              content: `Unknown tool: ${toolCall.name}`,
-              isError: true,
+              id: toolCall.id,
+              arguments: toolCall.arguments,
+            });
+
+            // Emit file activity for sandbox progress tracking
+            this.emitFileActivity(sessionId, toolCall.name, toolCall.arguments);
+
+            const tool = this.tools.get(toolCall.name);
+            if (tool) {
+              // Special handling for askQuestion
+              if (toolCall.name === 'askQuestion') {
+                this.postSessionMessage(sessionId, {
+                  type: 'askQuestion',
+                  question: (toolCall.arguments.question as string) || 'The assistant has a question for you.',
+                  toolCallId: toolCall.id,
+                });
+              }
+
+              // Validate required parameters before execution
+              const validationError = this.validateToolParams(tool, toolCall.arguments);
+              if (validationError) {
+                this.postSessionMessage(sessionId, {
+                  type: 'toolCallResult',
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  content: validationError,
+                  isError: true,
+                });
+                toolResults.push({ toolCallId: toolCall.id, content: validationError, isError: true });
+                continue;
+              }
+
+              try {
+                const result = await tool.execute(toolCall.arguments);
+                this.postSessionMessage(sessionId, {
+                  type: 'toolCallResult',
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  content: result.content,
+                  isError: result.isError,
+                });
+                toolResults.push({ toolCallId: toolCall.id, content: result.content, isError: result.isError });
+              } catch (toolErr) {
+                const errContent = `Tool execution error: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`;
+                this.postSessionMessage(sessionId, {
+                  type: 'toolCallResult',
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  content: errContent,
+                  isError: true,
+                });
+                toolResults.push({ toolCallId: toolCall.id, content: errContent, isError: true });
+              }
+            } else {
+              const errContent = `Unknown tool: ${toolCall.name}`;
+              this.postSessionMessage(sessionId, {
+                type: 'toolCallResult',
+                id: toolCall.id,
+                name: toolCall.name,
+                content: errContent,
+                isError: true,
+              });
+              toolResults.push({ toolCallId: toolCall.id, content: errContent, isError: true });
+            }
+          }
+
+          // Add tool results to conversation + history so the LLM sees them
+          const toolResultsMsg: ChatMessage = { role: 'user', content: '', toolResults };
+          messages.push(toolResultsMsg);
+          this.sessionManager.addMessage(sessionId, toolResultsMsg);
+
+          // ── Loop detection: if the LLM keeps calling the same tools, nudge it ──
+          const callSigs = response.toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`).join('|');
+          recentToolCalls.push(callSigs);
+          if (recentToolCalls.length >= 3) {
+            const last3 = recentToolCalls.slice(-3);
+            if (last3[0] === last3[1] && last3[1] === last3[2]) {
+              // Inject a corrective nudge as a user message
+              const nudge: ChatMessage = {
+                role: 'user',
+                content: '[SYSTEM] You are repeating the same tool calls without making progress. STOP listing/reading and START creating files with writeFile or running commands with runTerminal. Implement the next pending TODO item NOW.',
+              };
+              messages.push(nudge);
+              this.sessionManager.addMessage(sessionId, nudge);
+              recentToolCalls.length = 0; // Reset to give it a fresh chance
+            }
+          }
+
+          // Loop back: the LLM will be called again with tool results
+        } else {
+          // No tool calls (or max iterations reached) — this is the final response
+          responseText = response.content ?? '';
+          if (responseText) {
+            this.sessionManager.addMessage(sessionId, { role: 'assistant', content: responseText });
+          }
+
+          if (toolIteration >= ChatViewProvider.MAX_TOOL_ITERATIONS && response.toolCalls?.length) {
+            this.postSessionMessage(sessionId, {
+              type: 'streamChunk',
+              content: '\n\n\u26A0\uFE0F *Reached maximum tool iterations. Stopping.*\n',
             });
           }
+
+          keepLooping = false;
         }
       }
 
       this.postSessionMessage(sessionId, { type: 'messageComplete' });
-
-      responseText = response.content ?? '';
-      if (responseText) {
-        this.sessionManager.addMessage(sessionId, {
-          role: 'assistant',
-          content: responseText,
-        });
-      }
       this.sessionManager.setSessionStatus(sessionId, 'idle');
     } catch (err) {
       // Handle abort/cancellation gracefully
