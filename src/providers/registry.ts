@@ -2,8 +2,10 @@ import * as vscode from 'vscode';
 import { LLMProvider, ModelInfo } from './types';
 import { ProfileManager, ProviderProfile } from './profile-manager';
 import { AnthropicProvider } from './anthropic';
+import { ClaudeCodeProvider } from './claude-code';
 import { OpenAIProvider } from './openai';
 import { OpenAICompatibleProvider } from './openai-compatible';
+import { KiloGatewayProvider } from './kilo-gateway';
 
 export class ProviderRegistry {
   private providers = new Map<string, LLMProvider>();
@@ -70,6 +72,12 @@ export class ProviderRegistry {
           profile.name,
           profile.baseUrl
         );
+      }
+      case 'claude-code': {
+        return new ClaudeCodeProvider();
+      }
+      case 'kilo-gateway': {
+        return new KiloGatewayProvider();
       }
       default:
         return null;

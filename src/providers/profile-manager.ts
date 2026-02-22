@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { randomUUID } from 'crypto';
 
-export type ApiKind = 'anthropic' | 'openai' | 'openai-compatible';
+export type ApiKind = 'anthropic' | 'openai' | 'openai-compatible' | 'claude-code' | 'kilo-gateway';
 
 export interface ProviderProfile {
   id: string;
@@ -23,6 +23,8 @@ const DEFAULT_BASE_URLS: Record<ApiKind, string> = {
   anthropic: 'https://api.anthropic.com',
   openai: 'https://api.openai.com/v1',
   'openai-compatible': '',
+  'claude-code': 'https://api.anthropic.com',
+  'kilo-gateway': 'https://api.kilo.ai/api/gateway',
 };
 
 export class ProfileManager {

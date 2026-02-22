@@ -165,8 +165,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.handleGetModes();
     this.handleGetContext();
 
-    // Re-send provider list when profiles change
-    this.profileManager.onDidChangeProfiles(() => {
+    // Re-send provider list after registry finishes re-initializing
+    this.registry.onDidChangeProviders(() => {
       this.sendProviderList();
     });
 
