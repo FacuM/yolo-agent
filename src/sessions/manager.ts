@@ -41,6 +41,8 @@ export interface SmartTodoPlan {
   verifyIterations: number;
   /** Max verify iterations before force-stopping */
   maxIterations: number;
+  /** Cumulative nudge count across all LLM rounds in this session */
+  cumulativeNudges: number;
   /** File references from the original request (preserved across clarification rounds) */
   fileReferences?: string[];
   /** Clarification questions the LLM asked (shown to user) */
@@ -277,6 +279,7 @@ export class SessionManager {
       phase: 'planning',
       verifyIterations: 0,
       maxIterations,
+      cumulativeNudges: 0,
     };
     this.fireChange();
   }

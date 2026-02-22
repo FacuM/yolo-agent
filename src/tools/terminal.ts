@@ -46,12 +46,26 @@ export class RunTerminalTool implements Tool {
 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
 
+    // When sandbox is active, run commands in the sandbox worktree
+    let effectiveCwd: string | undefined;
+    if (this.sandboxManager) {
+      const info = this.sandboxManager.getSandboxInfo();
+      if (info.isActive && info.config) {
+        effectiveCwd = cwd
+          ? require('path').resolve(info.config.worktreePath, cwd)
+          : info.config.worktreePath;
+      }
+    }
+    if (!effectiveCwd) {
+      effectiveCwd = cwd
+        ? vscode.Uri.joinPath(workspaceFolder?.uri ?? vscode.Uri.file('/'), cwd).fsPath
+        : workspaceFolder?.uri.fsPath;
+    }
+
     try {
       // Use VS Code's shell execution via a task
       const shellExec = new vscode.ShellExecution(command, {
-        cwd: cwd
-          ? vscode.Uri.joinPath(workspaceFolder?.uri ?? vscode.Uri.file('/'), cwd).fsPath
-          : workspaceFolder?.uri.fsPath,
+        cwd: effectiveCwd,
       });
 
       const task = new vscode.Task(

@@ -42,7 +42,12 @@
   const apiSpinner = document.getElementById('api-spinner');
   const modeSelect = /** @type {HTMLSelectElement} */ (document.getElementById('mode-select'));
   const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById('provider-select'));
-  const modelSelect = /** @type {HTMLSelectElement} */ (document.getElementById('model-select'));
+  // Model picker autocomplete elements
+  const modelInput = /** @type {HTMLInputElement} */ (document.getElementById('model-input'));
+  const modelDropdown = /** @type {HTMLDivElement} */ (document.getElementById('model-dropdown'));
+  let modelList = []; // All available models: { id, name }
+  let activeModelId = ''; // Currently selected model id
+  let modelDropdownActiveIndex = -1; // Keyboard navigation index
   const newChatBtn = document.getElementById('new-chat-btn');
   const sessionsBtn = document.getElementById('sessions-btn');
   const sessionsBackBtn = document.getElementById('sessions-back-btn');
@@ -199,8 +204,108 @@
     vscode.postMessage({ type: 'switchProvider', providerId: providerSelect.value });
   });
 
-  modelSelect.addEventListener('change', () => {
-    vscode.postMessage({ type: 'switchModel', modelId: modelSelect.value });
+  // ── Model picker autocomplete logic ──
+
+  function renderModelDropdown(filter) {
+    modelDropdown.textContent = '';
+    modelDropdownActiveIndex = -1;
+    const query = (filter || '').toLowerCase();
+    const filtered = query
+      ? modelList.filter(m => (m.name || m.id).toLowerCase().includes(query) || m.id.toLowerCase().includes(query))
+      : modelList;
+
+    if (filtered.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'model-dropdown-empty';
+      empty.textContent = query ? 'No matching models' : 'No models available';
+      modelDropdown.appendChild(empty);
+    } else {
+      filtered.forEach((m, idx) => {
+        const item = document.createElement('div');
+        item.className = 'model-dropdown-item';
+        if (m.id === activeModelId) { item.classList.add('selected'); }
+        item.textContent = m.name || m.id;
+        item.dataset.modelId = m.id;
+        item.dataset.index = String(idx);
+        item.addEventListener('mousedown', (e) => {
+          e.preventDefault(); // Prevent blur before selection
+          selectModel(m.id, m.name || m.id);
+        });
+        modelDropdown.appendChild(item);
+      });
+    }
+    modelDropdown.classList.remove('hidden');
+  }
+
+  function selectModel(id, displayName) {
+    activeModelId = id;
+    modelInput.value = displayName || id;
+    modelDropdown.classList.add('hidden');
+    vscode.postMessage({ type: 'switchModel', modelId: id });
+  }
+
+  function highlightDropdownItem(index) {
+    const items = modelDropdown.querySelectorAll('.model-dropdown-item');
+    items.forEach(el => el.classList.remove('active'));
+    if (index >= 0 && index < items.length) {
+      items[index].classList.add('active');
+      items[index].scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  modelInput.addEventListener('focus', () => {
+    renderModelDropdown(modelInput.value);
+  });
+
+  modelInput.addEventListener('input', () => {
+    renderModelDropdown(modelInput.value);
+  });
+
+  modelInput.addEventListener('blur', () => {
+    // Delay to let mousedown fire on dropdown items
+    setTimeout(() => {
+      modelDropdown.classList.add('hidden');
+      // If input doesn't match current selection, restore the display name
+      const current = modelList.find(m => m.id === activeModelId);
+      if (current) {
+        modelInput.value = current.name || current.id;
+      } else if (activeModelId) {
+        modelInput.value = activeModelId;
+      }
+    }, 150);
+  });
+
+  modelInput.addEventListener('keydown', (e) => {
+    const items = modelDropdown.querySelectorAll('.model-dropdown-item');
+    if (modelDropdown.classList.contains('hidden')) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter') {
+        renderModelDropdown(modelInput.value);
+        e.preventDefault();
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      modelDropdownActiveIndex = Math.min(modelDropdownActiveIndex + 1, items.length - 1);
+      highlightDropdownItem(modelDropdownActiveIndex);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      modelDropdownActiveIndex = Math.max(modelDropdownActiveIndex - 1, 0);
+      highlightDropdownItem(modelDropdownActiveIndex);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (modelDropdownActiveIndex >= 0 && modelDropdownActiveIndex < items.length) {
+        const el = items[modelDropdownActiveIndex];
+        selectModel(el.dataset.modelId, el.textContent);
+      } else if (items.length === 1) {
+        // Auto-select sole match
+        selectModel(items[0].dataset.modelId, items[0].textContent);
+      }
+    } else if (e.key === 'Escape') {
+      modelDropdown.classList.add('hidden');
+      modelInput.blur();
+    }
   });
 
   modeSelect.addEventListener('change', () => {
@@ -478,7 +583,7 @@
         handleThinking(message.content);
         break;
       case 'toolCallStarted':
-        handleToolCallStarted(message.name, message.id, message.arguments);
+        handleToolCallStarted(message.name, message.id, message.args);
         break;
       case 'toolCallResult':
         handleToolCallResult(message.id, message.name, message.content, message.isError);
@@ -1742,12 +1847,12 @@
       opt.value = '';
       opt.textContent = 'No providers - click \u2699 to add';
       providerSelect.appendChild(opt);
-      // Clear model select too
-      modelSelect.textContent = '';
-      const mopt = document.createElement('option');
-      mopt.value = '';
-      mopt.textContent = 'No model';
-      modelSelect.appendChild(mopt);
+      // Clear model picker too
+      modelList = [];
+      activeModelId = '';
+      modelInput.value = '';
+      modelInput.placeholder = 'No models';
+      modelDropdown.classList.add('hidden');
       return;
     }
     for (const p of providers) {
@@ -1759,30 +1864,23 @@
     }
   }
 
-  function updateModelList(models, activeModelId) {
-    modelSelect.textContent = '';
-    if (!models || models.length === 0) {
-      const opt = document.createElement('option');
-      opt.value = activeModelId || '';
-      opt.textContent = activeModelId || 'No models';
-      modelSelect.appendChild(opt);
-      return;
+  function updateModelList(models, newActiveModelId) {
+    modelList = models || [];
+    activeModelId = newActiveModelId || '';
+
+    // If active model not in list, add it so the input displays something
+    if (activeModelId && !modelList.some(m => m.id === activeModelId)) {
+      modelList = [{ id: activeModelId, name: activeModelId }, ...modelList];
     }
-    // If active model not in list, add it first
-    const modelIds = models.map(m => m.id);
-    if (activeModelId && !modelIds.includes(activeModelId)) {
-      const opt = document.createElement('option');
-      opt.value = activeModelId;
-      opt.textContent = activeModelId;
-      opt.selected = true;
-      modelSelect.appendChild(opt);
-    }
-    for (const m of models) {
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.name || m.id;
-      if (m.id === activeModelId) { opt.selected = true; }
-      modelSelect.appendChild(opt);
+
+    // Update the input display value
+    const current = modelList.find(m => m.id === activeModelId);
+    modelInput.value = current ? (current.name || current.id) : (activeModelId || '');
+    modelInput.placeholder = modelList.length === 0 ? 'No models' : 'Search models\u2026';
+
+    // If dropdown is visible, re-render with current filter
+    if (!modelDropdown.classList.contains('hidden')) {
+      renderModelDropdown(modelInput.value);
     }
   }
 

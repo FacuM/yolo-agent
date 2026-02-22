@@ -79,8 +79,8 @@ CRITICAL RULES:
 {PLAN}
 
 **Instructions:**
-1. For EACH TODO item, verify whether it was actually completed by reading files, running tests, and checking diagnostics.
-2. Include E2E / integration testing where applicable.
+1. For EACH TODO item, verify whether it was actually completed based on the workspace files provided below.
+2. Check that required files exist, contain the expected code, and look correct.
 3. Respond with **exactly** this format for each item:
 
 \`\`\`verification
@@ -95,7 +95,8 @@ Rules:
 - Use FAILED if the item is missing, broken, or incomplete — explain why.
 - Use IN-PROGRESS if partially done.
 - After the verification block, summarize: which items pass, which need work.
-- If all items are DONE, end with "ALL TODOS VERIFIED".`;
+- If all items are DONE, end with "ALL TODOS VERIFIED".
+- You do NOT have access to tools. Base your verification ONLY on the workspace files shown below.`;
 
   /** Maximum tool-call ↔ LLM iterations within a single round */
   private static readonly MAX_TOOL_ITERATIONS = 25;
@@ -397,6 +398,8 @@ Rules:
     userText: string,
     fileReferences?: string[],
     systemPromptOverride?: string,
+    /** When true, read-only tools (listFiles, getDiagnostics, getSandboxStatus) are removed from the palette so weak LLMs cannot spin on them. */
+    restrictReadOnlyTools?: boolean,
   ): Promise<string> {
     const provider = this.registry.getActiveProvider()!;
 
@@ -408,6 +411,14 @@ Rules:
     // from calling a tool that will always fail and spinning in a loop.
     if (!this.sandboxManager?.getSandboxInfo().isActive) {
       allowedToolNames = allowedToolNames.filter(n => n !== 'runSandboxedCommand');
+    }
+
+    // During execution rounds, remove read-only tools so weak LLMs cannot spin
+    // on listFiles/getDiagnostics/getSandboxStatus without ever writing files.
+    // readFile is kept because the LLM may need to read existing code for modifications.
+    if (restrictReadOnlyTools) {
+      const EXECUTION_BLOCKED_TOOLS = new Set(['listFiles', 'getDiagnostics', 'getSandboxStatus']);
+      allowedToolNames = allowedToolNames.filter(n => !EXECUTION_BLOCKED_TOOLS.has(n));
     }
 
     const allowedTools = allowedToolNames.map(name => this.tools.get(name)!.definition);
@@ -473,7 +484,11 @@ Rules:
       let toolIteration = 0;
       let keepLooping = true;
       const recentToolCalls: string[] = []; // Track recent tool signatures for loop detection
-      let nudgesSent = 0; // Escalation counter: force-break after repeated nudges
+
+      // Use cumulative nudge count from the smart-todo plan if available,
+      // so that nudge escalation persists across execute→verify→execute cycles.
+      const smartTodo = this.sessionManager.getSmartTodo(sessionId);
+      let nudgesSent = smartTodo?.cumulativeNudges ?? 0;
 
       while (keepLooping) {
         // Check abort before each provider call
@@ -518,7 +533,7 @@ Rules:
               type: 'toolCallStarted',
               name: toolCall.name,
               id: toolCall.id,
-              arguments: toolCall.arguments,
+              args: toolCall.arguments,
             });
 
             // Emit file activity for sandbox progress tracking
@@ -704,6 +719,8 @@ Rules:
 
       // If aborted during the tool loop (not via thrown error), handle it here
       if (abortCtrl.signal.aborted) {
+        // Persist cumulative nudge count back to smart-todo plan
+        if (smartTodo) { smartTodo.cumulativeNudges = nudgesSent; }
         this.postSessionMessage(sessionId, {
           type: 'streamChunk',
           content: '\n\n*[Generation stopped]*',
@@ -712,6 +729,9 @@ Rules:
         this.sessionManager.setSessionStatus(sessionId, 'idle');
         return '[CANCELLED]';
       }
+
+      // Persist cumulative nudge count back to smart-todo plan
+      if (smartTodo) { smartTodo.cumulativeNudges = nudgesSent; }
 
       this.postSessionMessage(sessionId, { type: 'messageComplete' });
       this.sessionManager.setSessionStatus(sessionId, 'idle');
@@ -971,6 +991,38 @@ Rules:
     todos: TodoItem[],
     sandboxPreamble: string,
   ): Promise<void> {
+    // ── Auto-create sandbox if in sandboxed mode and no sandbox exists yet ──
+    const isSandboxed = this.modeManager.isSandboxedSmartTodoMode();
+    if (isSandboxed && this.sandboxManager && !this.sandboxManager.getSandboxInfo().isActive) {
+      try {
+        // Derive a feature name from the user request (first few words)
+        const featureName = userText
+          .replace(/[^a-zA-Z0-9 ]/g, '')
+          .trim()
+          .split(/\s+/)
+          .slice(0, 4)
+          .join('-')
+          .toLowerCase()
+          .slice(0, 40) || 'task';
+
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: `\n\n\uD83D\uDD12 **Creating sandbox branch for isolated development...**\n`,
+        });
+
+        const config = await this.sandboxManager.createSandbox(featureName);
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: `\u2705 Sandbox created: branch \`${config.branchName}\` at \`${config.worktreePath}\`\n\n`,
+        });
+      } catch (err) {
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: `\n\n\u26A0\uFE0F Sandbox creation failed: ${err instanceof Error ? err.message : String(err)}. Continuing without sandbox isolation.\n\n`,
+        });
+      }
+    }
+
     this.sessionManager.setSmartTodoItems(sessionId, todos);
     this.sessionManager.setSmartTodoPhase(sessionId, 'executing');
 
@@ -986,6 +1038,7 @@ Rules:
 
     // ── Phase 2–3: Execute → Verify loop ─────────────────────────────
     let iteration = 0;
+    let consecutiveNonProductiveRounds = 0;
     const maxIter = this.sessionManager.getSmartTodo(sessionId)?.maxIterations ?? 5;
 
     while (iteration < maxIter) {
@@ -1001,9 +1054,52 @@ Rules:
         ? `Please implement the plan now. Here is the original request:\n\n${userText}`
         : `Some TODOs are still incomplete. Please fix the following items:\n\n${pendingItems}\n\nOriginal request: ${userText}`;
 
-      await this.sendOneLLMRound(sessionId, execUserMsg, undefined, execPrompt);
+      // Snapshot of files before execution to detect if anything was actually written
+      const filesBefore = new Set<string>();
+      try {
+        const listTool = this.tools.get('listFiles');
+        if (listTool) {
+          const listing = await listTool.execute({ pattern: '**/*' });
+          if (!listing.isError) {
+            listing.content.split('\n').filter(f => f.trim()).forEach(f => filesBefore.add(f));
+          }
+        }
+      } catch { /* ignore */ }
 
-      // ── Verification pass ───────────────────────────────────────────
+      // Restrict read-only tools (listFiles, getDiagnostics, getSandboxStatus) during execution
+      // so weak LLMs are forced to use writeFile/runTerminal instead of spinning on reads.
+      await this.sendOneLLMRound(sessionId, execUserMsg, undefined, execPrompt, true);
+
+      // Check if execution was productive: compare files after execution
+      let executionProductive = false;
+      try {
+        const listTool = this.tools.get('listFiles');
+        if (listTool) {
+          const listing = await listTool.execute({ pattern: '**/*' });
+          if (!listing.isError) {
+            const filesAfter = listing.content.split('\n').filter(f => f.trim());
+            // Productive if any new files appeared or the file count changed
+            executionProductive = filesAfter.some(f => !filesBefore.has(f)) || filesAfter.length !== filesBefore.size;
+          }
+        }
+      } catch { /* treat as non-productive if we can't check */ }
+
+      if (executionProductive) {
+        consecutiveNonProductiveRounds = 0;
+      } else {
+        consecutiveNonProductiveRounds++;
+        if (consecutiveNonProductiveRounds >= 2) {
+          this.postSessionMessage(sessionId, {
+            type: 'streamChunk',
+            content: '\n\n\u26A0\uFE0F **Agent failed to produce files after 2 consecutive execution rounds. Stopping plan loop.**\n' +
+              'The model may not be capable of completing this task. Try a different model or break the request into simpler steps.\n',
+          });
+          this.postSessionMessage(sessionId, { type: 'messageComplete' });
+          break;
+        }
+      }
+
+      // ── Verification pass (tool-free to prevent spinning) ──────────
       this.sessionManager.setSmartTodoPhase(sessionId, 'verifying');
       iteration = this.sessionManager.incrementVerifyIteration(sessionId);
 
@@ -1014,15 +1110,46 @@ Rules:
         iteration,
       });
 
+      // Gather workspace context ourselves so the LLM doesn't need tools
+      let workspaceContext = '';
+      try {
+        const listTool = this.tools.get('listFiles');
+        if (listTool) {
+          const listing = await listTool.execute({ pattern: '**/*' });
+          workspaceContext += `\n\n--- Files in workspace ---\n${listing.content}`;
+        }
+        // Read key files (small ones) so the LLM can check content
+        const listing = await this.tools.get('listFiles')?.execute({ pattern: '**/*' });
+        if (listing && !listing.isError) {
+          const files = listing.content.split('\n').filter(f => f.trim());
+          // Read first 10 relevant files (skip node_modules, binaries, etc.)
+          const readableFiles = files
+            .filter(f => /\.(ts|tsx|js|jsx|json|html|css|md|yml|yaml|toml|cfg|txt)$/i.test(f))
+            .slice(0, 10);
+          for (const file of readableFiles) {
+            try {
+              const readTool = this.tools.get('readFile');
+              if (readTool) {
+                const content = await readTool.execute({ path: file });
+                if (!content.isError && content.content.length < 5000) {
+                  workspaceContext += `\n\n--- ${file} ---\n${content.content}`;
+                }
+              }
+            } catch { /* skip unreadable files */ }
+          }
+        }
+      } catch { /* workspace scan failed, LLM will verify with what it knows */ }
+
       const verifyPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_VERIFY_PROMPT
         .replace('{USER_REQUEST}', userText)
-        .replace('{PLAN}', planText);
+        .replace('{PLAN}', planText)
+        + workspaceContext;
 
-      const verifyResponse = await this.sendOneLLMRound(
+      // Use tool-free sendPlanningRound to prevent the LLM from spinning on listFiles
+      const verifyResponse = await this.sendPlanningRound(
         sessionId,
-        `Verify the current state of all TODOs. This is verification iteration ${iteration}.`,
-        undefined,
         verifyPrompt,
+        `Verify the current state of all TODOs. This is verification iteration ${iteration}. Based on the workspace files shown above, determine which TODOs are DONE and which have FAILED.`,
       );
 
       // Parse verification results and update todo statuses
@@ -1679,9 +1806,10 @@ Rules:
           <select id="provider-select" title="Select provider">
             <option value="">No providers</option>
           </select>
-          <select id="model-select" title="Select model">
-            <option value="">No model</option>
-          </select>
+          <div id="model-picker" class="model-picker">
+            <input id="model-input" type="text" placeholder="Search models…" title="Select model" autocomplete="off" spellcheck="false" />
+            <div id="model-dropdown" class="model-dropdown hidden"></div>
+          </div>
           <button id="new-chat-btn" title="New chat">+</button>
           <button id="sessions-btn" title="Sessions">\u2630</button>
           <button id="context-btn" title="Context">\u2295</button>

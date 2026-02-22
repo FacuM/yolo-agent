@@ -102,8 +102,7 @@ body {
 
 /* Header controls */
 #mode-select,
-#provider-select,
-#model-select {
+#provider-select {
   padding: 4px 8px;
   background: var(--vscode-dropdown-background);
   color: var(--vscode-dropdown-foreground);
@@ -122,10 +121,82 @@ body {
   max-width: 110px;
 }
 
-#model-select {
+/* Model picker autocomplete */
+.model-picker {
+  position: relative;
   flex: 1;
-  max-width: 160px;
+  max-width: 200px;
+  min-width: 0;
+}
+
+#model-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  background-color: var(--vscode-dropdown-background, var(--vscode-input-background));
+  color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
   text-overflow: ellipsis;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+#model-input::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+#model-input:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+.model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  background-color: var(--vscode-dropdown-background, var(--vscode-input-background));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  z-index: 1000;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.model-dropdown.hidden {
+  display: none;
+}
+
+.model-dropdown-item {
+  padding: 5px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--vscode-dropdown-foreground);
+}
+
+.model-dropdown-item:hover,
+.model-dropdown-item.active {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.model-dropdown-item.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.model-dropdown-empty {
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--vscode-disabledForeground);
+  font-style: italic;
 }
 
 #new-chat-btn,

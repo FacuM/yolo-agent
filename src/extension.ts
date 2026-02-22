@@ -97,9 +97,9 @@ export async function activate(
   // Initialize tools with sandbox awareness (optional sandboxManager)
   const tools = new Map<string, Tool>();
   const toolInstances: Tool[] = [
-    new ReadFileTool(),
+    new ReadFileTool(sandboxManager),
     new WriteFileTool(sandboxManager),
-    new ListFilesTool(),
+    new ListFilesTool(sandboxManager),
     new RunTerminalTool(sandboxManager),
     new GetDiagnosticsTool(),
     new AskQuestionTool(),

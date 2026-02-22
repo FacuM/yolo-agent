@@ -399,11 +399,29 @@ export class SandboxManager {
 
     const workspacePath = this.workspaceFolder.uri.fsPath;
 
-    // Check if we're in a git repository
+    // Ensure we're in a git repository — auto-init if needed
     try {
       await execAsync('git rev-parse --git-dir', { cwd: workspacePath });
     } catch {
-      throw new Error('Not in a git repository. Cannot create sandbox.');
+      // Not a git repo — initialize one so we can create worktrees
+      try {
+        await execAsync('git init', { cwd: workspacePath });
+        // Need at least one commit for worktrees to work
+        await execAsync('git add -A && git commit --allow-empty -m "Initial commit (auto-created by sandbox)"', { cwd: workspacePath });
+      } catch (initErr) {
+        throw new Error(`Failed to initialize git repository: ${initErr}`);
+      }
+    }
+
+    // Ensure there is at least one commit (worktrees require HEAD)
+    try {
+      await execAsync('git rev-parse HEAD', { cwd: workspacePath });
+    } catch {
+      try {
+        await execAsync('git add -A && git commit --allow-empty -m "Initial commit (auto-created by sandbox)"', { cwd: workspacePath });
+      } catch {
+        // Ignore — we tried our best
+      }
     }
 
     // Check OS-level sandbox availability

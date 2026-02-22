@@ -28,10 +28,36 @@ export class ReadFileTool implements Tool {
     },
   };
 
+  constructor(private sandboxManager?: SandboxManager) {}
+
   async execute(params: Record<string, unknown>): Promise<ToolResult> {
     const filePath = params.path as string;
     const startLine = params.startLine as number | undefined;
     const endLine = params.endLine as number | undefined;
+
+    // When a sandbox is active, read from the sandbox worktree
+    if (this.sandboxManager) {
+      const info = this.sandboxManager.getSandboxInfo();
+      if (info.isActive && info.config) {
+        const fs = await import('fs/promises');
+        const fullPath = path.resolve(info.config.worktreePath, filePath);
+        try {
+          let text = await fs.readFile(fullPath, 'utf-8');
+          if (startLine !== undefined || endLine !== undefined) {
+            const lines = text.split('\n');
+            const start = (startLine ?? 1) - 1;
+            const end = endLine ?? lines.length;
+            text = lines.slice(start, end).join('\n');
+          }
+          return { content: text };
+        } catch (err) {
+          return {
+            content: `Failed to read file "${filePath}" in sandbox: ${err instanceof Error ? err.message : String(err)}`,
+            isError: true,
+          };
+        }
+      }
+    }
 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
@@ -92,14 +118,31 @@ export class WriteFileTool implements Tool {
     const filePath = params.path as string;
     const content = params.content as string;
 
-    // Check sandbox restrictions if in sandbox mode
+    // When a sandbox is active, redirect writes to the sandbox worktree
     if (this.sandboxManager) {
-      const check = this.sandboxManager.isFilePathAllowed(filePath);
-      if (!check.allowed) {
-        return {
-          content: `File write blocked: ${check.reason}`,
-          isError: true,
-        };
+      const info = this.sandboxManager.getSandboxInfo();
+      if (info.isActive && info.config) {
+        const check = this.sandboxManager.isFilePathAllowed(filePath);
+        if (!check.allowed) {
+          return {
+            content: `File write blocked: ${check.reason}`,
+            isError: true,
+          };
+        }
+
+        // Write to the sandbox worktree instead of the main workspace
+        const fs = await import('fs/promises');
+        const fullPath = path.resolve(info.config.worktreePath, filePath);
+        try {
+          await fs.mkdir(path.dirname(fullPath), { recursive: true });
+          await fs.writeFile(fullPath, content, 'utf-8');
+          return { content: `File written: ${filePath} (in sandbox branch: ${info.config.branchName})` };
+        } catch (err) {
+          return {
+            content: `Failed to write file "${filePath}" in sandbox: ${err instanceof Error ? err.message : String(err)}`,
+            isError: true,
+          };
+        }
       }
     }
 
@@ -151,9 +194,36 @@ export class ListFilesTool implements Tool {
     },
   };
 
+  constructor(private sandboxManager?: SandboxManager) {}
+
   async execute(params: Record<string, unknown>): Promise<ToolResult> {
     const pattern = params.pattern as string;
     const exclude = params.exclude as string | undefined;
+
+    // When a sandbox is active, list files from the sandbox worktree using glob
+    if (this.sandboxManager) {
+      const info = this.sandboxManager.getSandboxInfo();
+      if (info.isActive && info.config) {
+        const fs = await import('fs/promises');
+        const { glob } = await import('glob');
+        try {
+          const matches = await glob(pattern, {
+            cwd: info.config.worktreePath,
+            ignore: exclude ? [exclude] : ['**/node_modules/**'],
+            nodir: true,
+          });
+          if (matches.length === 0) {
+            return { content: 'No files found matching the pattern in sandbox.' };
+          }
+          return { content: matches.sort().join('\n') };
+        } catch (err) {
+          return {
+            content: `Failed to list files in sandbox: ${err instanceof Error ? err.message : String(err)}`,
+            isError: true,
+          };
+        }
+      }
+    }
 
     try {
       const files = await vscode.workspace.findFiles(
