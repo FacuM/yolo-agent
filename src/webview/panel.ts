@@ -390,16 +390,26 @@ Rules:
     this.abortControllers.set(sessionId, abortCtrl);
 
     let responseText = '';
+    let firstChunkReceived = false;
     try {
       const model = this.registry.getActiveModelId();
+
+      this.postSessionMessage(sessionId, { type: 'waitingForApi' });
 
       const response = await provider.sendMessage(
         messages,
         { model, tools: allowedTools },
         (chunk) => {
+          if (!firstChunkReceived) {
+            firstChunkReceived = true;
+            this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
+          }
           this.postSessionMessage(sessionId, { type: 'streamChunk', content: chunk });
         }
       );
+      if (!firstChunkReceived) {
+        this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
+      }
 
       if (response.thinking) {
         this.postSessionMessage(sessionId, { type: 'thinking', content: response.thinking });
@@ -495,7 +505,34 @@ Rules:
       );
 
       // Parse TODOs from the plan response
-      const todos = this.parseTodosFromPlan(planResponse);
+      let todos = this.parseTodosFromPlan(planResponse);
+
+      // If parsing failed, retry once with a stronger nudge
+      if (todos.length === 0) {
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: '\n\n\u26A0\uFE0F Plan format not detected. Retrying planning phase...\n',
+        });
+
+        const retryPrompt = sandboxPreamble + `The previous response did not include a \`\`\`plan code block. You MUST respond with a plan in this exact format:\n\n\`\`\`plan\nTODO 1: <Title> \u2014 <Description>\nTODO 2: <Title> \u2014 <Description>\n...\n\`\`\`\n\nDo NOT ask questions. Do NOT explain. ONLY output the plan block. Make reasonable assumptions for any missing details.`;
+        const retryResponse = await this.sendOneLLMRound(
+          sessionId,
+          userText,
+          fileReferences,
+          retryPrompt,
+        );
+        todos = this.parseTodosFromPlan(retryResponse);
+      }
+
+      // If still no plan, create a single catch-all TODO from the user request
+      if (todos.length === 0) {
+        todos = [{ id: 1, title: 'Complete user request', status: 'pending' as TodoItemStatus, detail: userText }];
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: '\n\n\u26A0\uFE0F Could not extract structured TODOs. Using a single task for the full request.\n',
+        });
+      }
+
       this.sessionManager.setSmartTodoItems(sessionId, todos);
       this.sessionManager.setSmartTodoPhase(sessionId, 'executing');
 
@@ -505,13 +542,6 @@ Rules:
         todos,
         iteration: 0,
       });
-
-      if (todos.length === 0) {
-        this.postSessionMessage(sessionId, {
-          type: 'streamChunk',
-          content: '\n\n⚠️ Could not parse a structured plan. Proceeding with a single execution pass.\n',
-        });
-      }
 
       // Build the plan text for subsequent prompts
       const planText = this.formatPlanText(todos);
@@ -1086,6 +1116,9 @@ Rules:
           <button class="steering-btn" data-steer="summarize">Summarize</button>
           <button class="steering-btn" data-steer="expand">Expand</button>
           <span style="flex:1"></span>
+          <span id="api-spinner" class="api-spinner hidden">
+            <span class="spinner-dot"></span> Waiting for API...
+          </span>
           <button id="stop-btn" class="stop-btn" title="Stop generation" disabled>\u25A0</button>
         </div>
         <div id="queue-section" class="hidden">

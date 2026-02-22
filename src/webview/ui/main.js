@@ -39,6 +39,7 @@
   const inputEl = /** @type {HTMLTextAreaElement} */ (document.getElementById('message-input'));
   const sendBtn = /** @type {HTMLButtonElement} */ (document.getElementById('send-btn'));
   const stopBtn = /** @type {HTMLButtonElement} */ (document.getElementById('stop-btn'));
+  const apiSpinner = document.getElementById('api-spinner');
   const modeSelect = /** @type {HTMLSelectElement} */ (document.getElementById('mode-select'));
   const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById('provider-select'));
   const modelSelect = /** @type {HTMLSelectElement} */ (document.getElementById('model-select'));
@@ -458,6 +459,12 @@
       case 'modeChanged':
         currentModeId = message.mode.id;
         updateModeSelector();
+        break;
+      case 'waitingForApi':
+        apiSpinner.classList.remove('hidden');
+        break;
+      case 'apiResponseStarted':
+        apiSpinner.classList.add('hidden');
         break;
       case 'streamChunk':
         handleStreamChunk(message.content);
@@ -1317,6 +1324,7 @@
     isStreaming = false;
     sendBtn.disabled = false;
     stopBtn.disabled = true;
+    apiSpinner.classList.add('hidden');
     removeStreamingCursor();
     currentAssistantEl = null;
     currentAssistantText = '';
@@ -1331,6 +1339,7 @@
     isStreaming = false;
     sendBtn.disabled = false;
     stopBtn.disabled = true;
+    apiSpinner.classList.add('hidden');
     removeStreamingCursor();
     currentAssistantEl = null;
     currentAssistantText = '';

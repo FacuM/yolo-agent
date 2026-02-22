@@ -476,6 +476,40 @@ body {
   cursor: not-allowed;
 }
 
+/* API Spinner */
+.api-spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  opacity: 0.85;
+  padding: 2px 8px;
+  animation: fadeIn 0.15s ease;
+}
+
+.api-spinner.hidden {
+  display: none;
+}
+
+.spinner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--vscode-foreground);
+  border-top-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 0.85; }
+}
+
 /* Active file toggle - compact inline */
 .active-file-btn {
   display: flex;
