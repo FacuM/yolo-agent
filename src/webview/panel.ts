@@ -402,7 +402,14 @@ Rules:
 
     // Get allowed tools based on current mode
     const allToolNames = Array.from(this.tools.keys());
-    const allowedToolNames = this.modeManager.getAllowedTools(allToolNames);
+    let allowedToolNames = this.modeManager.getAllowedTools(allToolNames);
+
+    // Filter out runSandboxedCommand when no sandbox is active — prevents the LLM
+    // from calling a tool that will always fail and spinning in a loop.
+    if (!this.sandboxManager?.getSandboxInfo().isActive) {
+      allowedToolNames = allowedToolNames.filter(n => n !== 'runSandboxedCommand');
+    }
+
     const allowedTools = allowedToolNames.map(name => this.tools.get(name)!.definition);
 
     // Build system prompt
@@ -466,6 +473,7 @@ Rules:
       let toolIteration = 0;
       let keepLooping = true;
       const recentToolCalls: string[] = []; // Track recent tool signatures for loop detection
+      let nudgesSent = 0; // Escalation counter: force-break after repeated nudges
 
       while (keepLooping) {
         // Check abort before each provider call
@@ -616,25 +624,43 @@ Rules:
             ? (recentToolCalls as any).nonProductiveStreak + 1
             : 0;
 
-          // Find tools that have errored 2+ times (LLM keeps retrying a broken tool)
+          // Find tools that have errored (LLM keeps retrying a broken tool)
           const repeatedErrorTools = Object.entries(
             (recentToolCalls as any).toolErrorCounts as Record<string, number>
-          ).filter(([, count]) => count >= 2).map(([name]) => name);
+          ).filter(([, count]) => count >= 1).map(([name]) => name);
 
           const shouldNudge =
-            // 3 identical call batches in a row
-            (recentToolCalls.length >= 3 && recentToolCalls.slice(-3).every(s => s === recentToolCalls[recentToolCalls.length - 1])) ||
-            // 3+ consecutive non-productive rounds (read-only, errors, or mix of both)
-            (recentToolCalls as any).nonProductiveStreak >= 3 ||
-            // Any tool has errored 2+ times — LLM isn't adapting to the error
+            // 2 identical call batches in a row
+            (recentToolCalls.length >= 2 && recentToolCalls.slice(-2).every(s => s === recentToolCalls[recentToolCalls.length - 1])) ||
+            // 2+ consecutive non-productive rounds (read-only, errors, or mix of both)
+            (recentToolCalls as any).nonProductiveStreak >= 2 ||
+            // Any tool has errored — LLM should switch to an alternative immediately
             repeatedErrorTools.length > 0;
 
           if (shouldNudge) {
+            nudgesSent++;
+
+            // After 2 nudges the LLM clearly isn't responding to guidance — force-break
+            if (nudgesSent >= 2) {
+              const forceMsg = '[SYSTEM] Stopping tool loop: repeated non-productive iterations after multiple warnings. ' +
+                'Summarize what you have done so far and what still needs to be done.';
+              messages.push({ role: 'user', content: forceMsg });
+              this.sessionManager.addMessage(sessionId, { role: 'user', content: forceMsg });
+
+              this.postSessionMessage(sessionId, {
+                type: 'streamChunk',
+                content: '\n\n\u26A0\uFE0F *Detected persistent loop — forcing tool-loop exit.*\n',
+              });
+              // Fall through to the final-response branch on next iteration
+              keepLooping = false;
+              break;
+            }
+
             // Build a targeted nudge message
             let nudgeBody = '[SYSTEM] You are spinning without making progress. ';
             if (repeatedErrorTools.length > 0) {
               const toolList = repeatedErrorTools.join(', ');
-              nudgeBody += `The following tool(s) have FAILED multiple times: ${toolList}. STOP using them and try alternatives. `;
+              nudgeBody += `The following tool(s) have FAILED: ${toolList}. STOP using them and try alternatives. `;
               if (repeatedErrorTools.includes('runSandboxedCommand')) {
                 nudgeBody += 'runSandboxedCommand requires createSandbox first — use runTerminal instead. ';
               }
