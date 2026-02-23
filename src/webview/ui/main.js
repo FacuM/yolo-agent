@@ -36,11 +36,18 @@
   const messagesEl = document.getElementById('messages');
   const inputEl = /** @type {HTMLTextAreaElement} */ (document.getElementById('message-input'));
   const sendBtn = /** @type {HTMLButtonElement} */ (document.getElementById('send-btn'));
+  const stopBtn = /** @type {HTMLButtonElement} */ (document.getElementById('stop-btn'));
   const modeSelect = /** @type {HTMLSelectElement} */ (document.getElementById('mode-select'));
   const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById('provider-select'));
   const newChatBtn = document.getElementById('new-chat-btn');
   const contextBtn = document.getElementById('context-btn');
   const settingsBtn = document.getElementById('settings-btn');
+  const currentModeDisplay = document.getElementById('current-mode-display');
+  const activeFileToggle = document.getElementById('active-file-toggle');
+  const activeFileDisplay = document.getElementById('active-file-display');
+  const queueSection = document.getElementById('queue-section');
+  const queueList = document.getElementById('queue-list');
+  const queueCount = document.getElementById('queue-count');
 
   // ===== Settings View Elements =====
   const settingsBackBtn = document.getElementById('settings-back-btn');
@@ -105,11 +112,15 @@
   let editingProfileId = null; // null = creating new, string = editing existing
   let profiles = [];
   let modes = [];
-  let currentModeId = 'agent';
+  let currentModeId = 'sandbox';
   let contextSkills = [];
   let contextAgentsMd = [];
   let mcpServers = [];
   let editingMcpServerId = null;
+  let commandQueue = [];
+  let activeFilePath = null;
+  let activeFileEnabled = false;
+  let abortController = null;
 
   const DEFAULT_BASE_URLS = {
     anthropic: 'https://api.anthropic.com',
@@ -155,6 +166,25 @@
     showView('context');
     vscode.postMessage({ type: 'getContext' });
   });
+
+  // Auto-resize textarea
+  inputEl.addEventListener('input', autoResizeTextarea);
+
+  // Stop button
+  stopBtn.addEventListener('click', stopGeneration);
+
+  // Steering buttons
+  document.querySelectorAll('.steering-btn').forEach(btn => {
+    btn.addEventListener('click', () => handleSteering(btn.dataset.steer));
+  });
+
+  // Active file toggle
+  activeFileToggle.addEventListener('click', () => {
+    vscode.postMessage({ type: 'toggleActiveFile' });
+  });
+
+  // Request initial active file state
+  vscode.postMessage({ type: 'getActiveFile' });
 
   // ===== Settings Event Listeners =====
   settingsBackBtn.addEventListener('click', () => {
@@ -431,6 +461,14 @@
           alert('Connection failed: ' + (message.error || 'Unknown error'));
         }
         break;
+
+      // Active file context
+      case 'activeFileState':
+      case 'activeFileToggled':
+        activeFilePath = message.file;
+        activeFileEnabled = message.enabled;
+        updateActiveFileDisplay();
+        break;
     }
   });
 
@@ -580,6 +618,124 @@
 
   // ===== Chat Functions =====
 
+  // Auto-resize textarea
+  function autoResizeTextarea() {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
+  }
+
+  // Stop generation
+  function stopGeneration() {
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+    isStreaming = false;
+    sendBtn.disabled = false;
+    stopBtn.disabled = true;
+    removeStreamingCursor();
+  }
+
+  // Handle steering commands
+  function handleSteering(type) {
+    if (!currentAssistantText || isStreaming) {
+      // If no recent message or streaming, add to queue
+      addToQueue(type);
+      return;
+    }
+
+    const steeringPrompts = {
+      continue: 'Please continue from where you left off.',
+      retry: 'Please try again with a different approach.',
+      summarize: 'Please summarize what we\'ve covered so far.',
+      expand: 'Please expand on your last response with more detail.',
+    };
+
+    const prompt = steeringPrompts[type] || type;
+    sendMessageWithPrompt(prompt);
+  }
+
+  // Send message with custom prompt
+  function sendMessageWithPrompt(prompt) {
+    if (isStreaming) { return; }
+
+    removeEmptyState();
+    appendMessage('user', prompt);
+
+    vscode.postMessage({ type: 'sendMessage', text: prompt });
+
+    inputEl.value = '';
+    isStreaming = true;
+    sendBtn.disabled = true;
+    stopBtn.disabled = false;
+
+    currentAssistantEl = appendMessage('assistant', '');
+    currentAssistantText = '';
+    addStreamingCursor(currentAssistantEl);
+  }
+
+  // Queue management
+  function addToQueue(type) {
+    const steeringNames = {
+      continue: 'Continue',
+      retry: 'Retry',
+      summarize: 'Summarize',
+      expand: 'Expand',
+    };
+
+    commandQueue.push({
+      type,
+      name: steeringNames[type] || type,
+      timestamp: Date.now(),
+    });
+
+    renderQueue();
+  }
+
+  function removeFromQueue(index) {
+    commandQueue.splice(index, 1);
+    renderQueue();
+  }
+
+  function renderQueue() {
+    if (commandQueue.length === 0) {
+      queueSection.classList.add('hidden');
+      return;
+    }
+
+    queueSection.classList.remove('hidden');
+    queueCount.textContent = commandQueue.length;
+
+    queueList.textContent = '';
+    for (let i = 0; i < commandQueue.length; i++) {
+      const item = commandQueue[i];
+      const el = document.createElement('div');
+      el.className = 'queue-item';
+
+      const name = document.createElement('span');
+      name.className = 'queue-item-name';
+      name.textContent = item.name;
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'queue-item-remove';
+      removeBtn.textContent = '\u2715';
+      removeBtn.title = 'Remove from queue';
+      removeBtn.addEventListener('click', () => removeFromQueue(i));
+
+      el.appendChild(name);
+      el.appendChild(removeBtn);
+      queueList.appendChild(el);
+    }
+  }
+
+  function processQueue() {
+    if (commandQueue.length === 0 || isStreaming) { return; }
+
+    const next = commandQueue.shift();
+    renderQueue();
+    handleSteering(next.type);
+  }
+
   function sendMessage() {
     const text = inputEl.value.trim();
     if (!text || isStreaming) { return; }
@@ -587,11 +743,22 @@
     removeEmptyState();
     appendMessage('user', text);
 
-    vscode.postMessage({ type: 'sendMessage', text });
+    // Create new abort controller for this request
+    abortController = new AbortController();
+
+    vscode.postMessage({
+      type: 'sendMessage',
+      text,
+      signal: abortController.signal
+    });
+
+    // Reset textarea height
+    inputEl.style.height = 'auto';
 
     inputEl.value = '';
     isStreaming = true;
     sendBtn.disabled = true;
+    stopBtn.disabled = false;
 
     currentAssistantEl = appendMessage('assistant', '');
     currentAssistantText = '';
@@ -753,18 +920,25 @@
   function handleMessageComplete() {
     isStreaming = false;
     sendBtn.disabled = false;
+    stopBtn.disabled = true;
     removeStreamingCursor();
     currentAssistantEl = null;
     currentAssistantText = '';
     inputEl.focus();
+    abortController = null;
+
+    // Process queue if there are pending commands
+    processQueue();
   }
 
   function handleError(msg) {
     isStreaming = false;
     sendBtn.disabled = false;
+    stopBtn.disabled = true;
     removeStreamingCursor();
     currentAssistantEl = null;
     currentAssistantText = '';
+    abortController = null;
 
     const el = document.createElement('div');
     el.className = 'message error';
@@ -886,6 +1060,31 @@
       opt.textContent = m.name;
       if (m.id === currentModeId) { opt.selected = true; }
       modeSelect.appendChild(opt);
+    }
+    // Update mode display in controls section
+    const currentMode = modes.find(m => m.id === currentModeId);
+    if (currentMode && currentModeDisplay) {
+      currentModeDisplay.textContent = currentMode.name;
+    }
+  }
+
+  function updateActiveFileDisplay() {
+    if (!activeFilePath) {
+      activeFileDisplay.textContent = 'None';
+      activeFileToggle.classList.remove('enabled');
+      activeFileToggle.title = 'No file open';
+      return;
+    }
+
+    const fileName = activeFilePath.split('/').pop();
+    activeFileDisplay.textContent = fileName;
+
+    if (activeFileEnabled) {
+      activeFileToggle.classList.add('enabled');
+      activeFileToggle.title = 'Click to remove "' + fileName + '" from context';
+    } else {
+      activeFileToggle.classList.remove('enabled');
+      activeFileToggle.title = 'Click to add "' + fileName + '" as context';
     }
   }
 

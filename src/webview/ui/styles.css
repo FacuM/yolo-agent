@@ -23,52 +23,110 @@ body {
   display: none !important;
 }
 
-/* ===== Chat View ===== */
+/* ===== Chat View (Claude Code style) ===== */
 #chat-view {
   display: flex;
   flex-direction: column;
   height: 100vh;
 }
 
-#header {
-  display: flex;
-  gap: 6px;
-  padding: 8px;
+/* ===== Input Section (Top) ===== */
+#input-section {
   border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-editor-background);
+}
+
+.input-header {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px;
   align-items: center;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.input-wrapper {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  align-items: flex-end;
+}
+
+#message-input {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 6px;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  resize: none;
+  min-height: 40px;
+  max-height: 200px;
+  overflow-y: auto;
+  line-height: 1.4;
+}
+
+#message-input:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder);
+}
+
+#message-input::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+#send-btn {
+  padding: 8px 12px;
+  min-width: 40px;
+  height: 40px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#send-btn:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground);
+}
+
+#send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Header controls */
+#mode-select,
+#provider-select {
+  padding: 4px 8px;
+  background: var(--vscode-dropdown-background);
+  color: var(--vscode-dropdown-foreground);
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 4px;
+  font-size: 12px;
+  max-width: 120px;
 }
 
 #provider-select {
   flex: 1;
-  padding: 4px 8px;
-  background: var(--vscode-dropdown-background);
-  color: var(--vscode-dropdown-foreground);
-  border: 1px solid var(--vscode-dropdown-border);
-  border-radius: 3px;
-  font-size: var(--vscode-font-size);
-}
-
-#mode-select {
-  padding: 4px 8px;
-  background: var(--vscode-dropdown-background);
-  color: var(--vscode-dropdown-foreground);
-  border: 1px solid var(--vscode-dropdown-border);
-  border-radius: 3px;
-  font-size: var(--vscode-font-size);
-  max-width: 100px;
+  max-width: none;
 }
 
 #new-chat-btn,
 #context-btn,
 #settings-btn {
-  padding: 4px 10px;
+  padding: 4px 8px;
   background: var(--vscode-button-secondaryBackground);
   color: var(--vscode-button-secondaryForeground);
   border: none;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
+  font-size: 14px;
 }
 
 #new-chat-btn:hover,
@@ -77,7 +135,7 @@ body {
   background: var(--vscode-button-secondaryHoverBackground);
 }
 
-/* Messages */
+/* ===== Messages (Middle) ===== */
 #messages {
   flex: 1;
   overflow-y: auto;
@@ -145,7 +203,7 @@ body {
   display: none;
   padding: 8px;
   font-family: var(--vscode-editor-font-family);
-  font-size: var(--vscode-editor-font-size);
+  font-size: 0.9em;
   white-space: pre-wrap;
   max-height: 200px;
   overflow-y: auto;
@@ -224,54 +282,6 @@ body {
   font-size: var(--vscode-editor-font-size);
 }
 
-/* Input area */
-#input-area {
-  display: flex;
-  gap: 6px;
-  padding: 8px;
-  border-top: 1px solid var(--vscode-panel-border);
-  align-items: flex-end;
-}
-
-#message-input {
-  flex: 1;
-  padding: 8px;
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
-  border: 1px solid var(--vscode-input-border);
-  border-radius: 4px;
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
-  resize: vertical;
-  min-height: 40px;
-  max-height: 150px;
-}
-
-#message-input:focus {
-  outline: none;
-  border-color: var(--vscode-focusBorder);
-}
-
-#send-btn {
-  padding: 8px 16px;
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: var(--vscode-font-size);
-  white-space: nowrap;
-}
-
-#send-btn:hover {
-  background: var(--vscode-button-hoverBackground);
-}
-
-#send-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* Streaming indicator */
 .streaming-indicator {
   display: inline-block;
@@ -304,6 +314,206 @@ body {
 .empty-state .title {
   font-size: 1.2em;
   font-weight: 600;
+}
+
+/* ===== Controls Section (Bottom) ===== */
+#controls-section {
+  border-top: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-editor-background);
+  padding: 8px;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.control-row:last-child {
+  margin-bottom: 0;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.control-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.control-value {
+  font-size: 12px;
+  font-weight: 500;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#current-mode-display {
+  color: var(--vscode-textLink-foreground);
+}
+
+/* Stop button */
+.stop-btn {
+  padding: 6px 12px;
+  background: var(--vscode-inputValidation-errorBackground);
+  color: var(--vscode-errorForeground);
+  border: 1px solid var(--vscode-inputValidation-errorBorder);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 18px;
+  min-width: 36px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stop-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.stop-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Active file toggle */
+.active-file-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 10px;
+  background: var(--vscode-button-secondaryBackground);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--vscode-foreground);
+  text-align: left;
+  opacity: 0.6;
+  transition: all 0.15s;
+}
+
+.active-file-btn:hover {
+  opacity: 1;
+  border-color: var(--vscode-focusBorder);
+}
+
+.active-file-btn.enabled {
+  opacity: 1;
+  background: var(--vscode-editor-selectionBackground);
+  border-color: var(--vscode-focusBorder);
+}
+
+.active-file-btn .control-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.active-file-btn .control-value {
+  font-size: 12px;
+  font-weight: 500;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Steering buttons */
+.steering-row {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.steering-btn {
+  padding: 6px 12px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+
+.steering-btn:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+  border-color: var(--vscode-focusBorder);
+}
+
+.steering-btn:active {
+  transform: scale(0.95);
+}
+
+/* Queue section */
+#queue-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+.queue-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.queue-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.queue-count {
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+#queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--vscode-input-background);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.queue-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-item-remove {
+  background: none;
+  border: none;
+  color: var(--vscode-errorForeground);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.queue-item-remove:hover {
+  background: var(--vscode-inputValidation-errorBackground);
 }
 
 /* ===== Settings & Editor Views ===== */

@@ -22,6 +22,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private contextManager: ContextManager;
   private mcpConfigManager: McpConfigManager;
   private mcpClient: McpClient;
+  private abortController: AbortController | null = null;
+  private activeFileContext: { path: string; content: string } | null = null;
+  private activeFileEnabled = false;
 
   constructor(
     extensionUri: vscode.Uri,
@@ -61,7 +64,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       switch (message.type) {
         // Chat messages
         case 'sendMessage':
-          await this.handleSendMessage(message.text);
+          await this.handleSendMessage(message.text, message.signal);
           break;
         case 'switchProvider':
           this.registry.setActiveProvider(message.providerId);
@@ -73,6 +76,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.sendModelList(message.providerId);
           break;
         case 'cancelRequest':
+          if (this.abortController) {
+            this.abortController.abort();
+            this.abortController = null;
+          }
           break;
         case 'newChat':
           this.conversationHistory = [];
@@ -129,6 +136,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'testMcpConnection':
           await this.handleTestMcpConnection(message.server);
           break;
+
+        // Active file context
+        case 'toggleActiveFile':
+          this.activeFileEnabled = !this.activeFileEnabled;
+          this.postMessage({
+            type: 'activeFileToggled',
+            enabled: this.activeFileEnabled,
+            file: this.activeFileContext?.path ?? null,
+          });
+          break;
+        case 'getActiveFile':
+          this.sendActiveFileState();
+          break;
       }
     });
 
@@ -141,11 +161,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.profileManager.onDidChangeProfiles(() => {
       this.sendProviderList();
     });
+
+    // Track active editor for file context
+    const updateActiveFile = (editor: vscode.TextEditor | undefined) => {
+      if (editor && editor.document.uri.scheme === 'file') {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        const fullPath = editor.document.uri.fsPath;
+        const relativePath = workspaceFolder
+          ? fullPath.replace(workspaceFolder.uri.fsPath + '/', '')
+          : fullPath;
+        this.activeFileContext = {
+          path: relativePath,
+          content: editor.document.getText(),
+        };
+      } else {
+        this.activeFileContext = null;
+      }
+      this.sendActiveFileState();
+    };
+
+    // Listen for editor changes
+    vscode.window.onDidChangeActiveTextEditor(updateActiveFile);
+    // Set initial active file
+    updateActiveFile(vscode.window.activeTextEditor);
   }
 
   // --- Chat handlers ---
 
-  private async handleSendMessage(text: string): Promise<void> {
+  private async handleSendMessage(text: string, signal?: unknown): Promise<void> {
     const provider = this.registry.getActiveProvider();
     if (!provider) {
       this.postMessage({
@@ -169,6 +212,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       modePrompt += '\n\n' + contextAddition;
     }
 
+    // Add active file context if enabled
+    if (this.activeFileEnabled && this.activeFileContext) {
+      modePrompt += `\n\n--- Active File Context ---\nThe user currently has "${this.activeFileContext.path}" open. Its contents:\n\`\`\`\n${this.activeFileContext.content}\n\`\`\``;
+    }
+
     const userMessage = { role: 'user' as const, content: text };
     const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
       { role: 'system', content: modePrompt },
@@ -177,6 +225,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ];
 
     this.conversationHistory.push({ role: 'user', content: text });
+
+    // Store abort controller for cancellation
+    if (signal instanceof AbortSignal) {
+      signal.addEventListener('abort', () => {
+        this.postMessage({ type: 'messageComplete' });
+      });
+      this.abortController = { signal } as any;
+    }
 
     try {
       const model = this.registry.getActiveModelId();
@@ -330,6 +386,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  // --- Active file handlers ---
+
+  private sendActiveFileState(): void {
+    this.postMessage({
+      type: 'activeFileState',
+      enabled: this.activeFileEnabled,
+      file: this.activeFileContext?.path ?? null,
+    });
+  }
+
   // --- Mode handlers ---
 
   private handleGetModes() {
@@ -463,19 +529,58 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <div id="app">
     <!-- Chat View -->
     <div id="chat-view">
-      <div id="header">
-        <select id="mode-select" title="Select mode"></select>
-        <select id="provider-select" title="Select provider">
-          <option value="">No providers</option>
-        </select>
-        <button id="new-chat-btn" title="New chat">+</button>
-        <button id="context-btn" title="Context">\u{1F4D6}</button>
-        <button id="settings-btn" title="Settings">\u2699</button>
+      <!-- Input area at top -->
+      <div id="input-section">
+        <div class="input-header">
+          <select id="mode-select" title="Select mode"></select>
+          <select id="provider-select" title="Select provider">
+            <option value="">No providers</option>
+          </select>
+          <button id="new-chat-btn" title="New chat">\u2795</button>
+          <button id="context-btn" title="Context">\u{1F4D6}</button>
+          <button id="settings-btn" title="Settings">\u2699</button>
+        </div>
+        <div class="input-wrapper">
+          <textarea id="message-input" placeholder="Ask YOLO Agent..." rows="1" data-autoresize></textarea>
+          <button id="send-btn" title="Send" disabled>\u27A4</button>
+        </div>
       </div>
+
+      <!-- Messages in middle -->
       <div id="messages"></div>
-      <div id="input-area">
-        <textarea id="message-input" placeholder="Ask YOLO Agent..." rows="3"></textarea>
-        <button id="send-btn" title="Send">Send</button>
+
+      <!-- Controls at bottom -->
+      <div id="controls-section">
+        <div class="control-row">
+          <div class="control-group">
+            <span class="control-label">Mode</span>
+            <span id="current-mode-display" class="control-value">Sandbox</span>
+          </div>
+          <button id="active-file-toggle" class="active-file-btn" title="Toggle active file as context">
+            <span class="control-label">File</span>
+            <span id="active-file-display" class="control-value">None</span>
+          </button>
+          <div class="control-group">
+            <button id="stop-btn" class="stop-btn" title="Stop generation" disabled>\u23F9</button>
+          </div>
+        </div>
+
+        <!-- Steering buttons -->
+        <div class="control-row steering-row">
+          <button class="steering-btn" data-steer="continue">Continue</button>
+          <button class="steering-btn" data-steer="retry">Retry</button>
+          <button class="steering-btn" data-steer="summarize">Summarize</button>
+          <button class="steering-btn" data-steer="expand">Expand</button>
+        </div>
+
+        <!-- Queue indicator -->
+        <div id="queue-section" class="hidden">
+          <div class="queue-header">
+            <span class="queue-label">Queued Commands</span>
+            <span id="queue-count" class="queue-count">0</span>
+          </div>
+          <div id="queue-list"></div>
+        </div>
       </div>
     </div>
 
