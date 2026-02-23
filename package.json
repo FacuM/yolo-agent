@@ -1,0 +1,71 @@
+{
+  "name": "yolo-agent",
+  "displayName": "YOLO Agent",
+  "description": "A coding agent for VS Code powered by multiple AI providers",
+  "version": "0.0.1",
+  "publisher": "yolo-agent",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "yolo-agent",
+          "title": "YOLO Agent",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "yolo-agent": [
+        {
+          "type": "webview",
+          "id": "yoloAgent.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "yoloAgent.newChat",
+        "title": "YOLO Agent: New Chat"
+      },
+      {
+        "command": "yoloAgent.setApiKey",
+        "title": "YOLO Agent: Set API Key"
+      }
+    ],
+    "configuration": {
+      "title": "YOLO Agent",
+      "properties": {}
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "lint": "eslint src/",
+    "test:e2e": "vscode-test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "openai": "^4.80.0"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.13.0",
+    "@types/vscode": "^1.96.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.24.2",
+    "mocha": "^11.1.0",
+    "typescript": "^5.7.0"
+  }
+}
