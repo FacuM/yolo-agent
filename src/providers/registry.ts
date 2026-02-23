@@ -10,14 +10,19 @@ import { KiloGatewayProvider } from './kilo-gateway';
 export class ProviderRegistry {
   private providers = new Map<string, LLMProvider>();
   private profileManager: ProfileManager;
+  private globalState: vscode.Memento;
   private activeProviderId: string | null = null;
   private activeModelOverride: string | null = null;
+
+  private static readonly STATE_PROVIDER_KEY = 'activeProviderId';
+  private static readonly STATE_MODEL_KEY = 'activeModelId';
 
   private readonly _onDidChangeProviders = new vscode.EventEmitter<void>();
   readonly onDidChangeProviders = this._onDidChangeProviders.event;
 
-  constructor(profileManager: ProfileManager) {
+  constructor(profileManager: ProfileManager, globalState: vscode.Memento) {
     this.profileManager = profileManager;
+    this.globalState = globalState;
 
     // Re-initialize when profiles change
     profileManager.onDidChangeProfiles(() => {
@@ -44,13 +49,22 @@ export class ProviderRegistry {
       this.providers.set(profile.id, provider);
     }
 
-    // Keep active provider if still valid, otherwise pick first
-    if (this.activeProviderId && !this.providers.has(this.activeProviderId)) {
+    // Restore persisted provider, fall back to first available
+    const savedProviderId = this.globalState.get<string>(ProviderRegistry.STATE_PROVIDER_KEY);
+    if (savedProviderId && this.providers.has(savedProviderId)) {
+      this.activeProviderId = savedProviderId;
+    } else if (this.activeProviderId && !this.providers.has(this.activeProviderId)) {
       this.activeProviderId = null;
     }
     if (!this.activeProviderId) {
       const firstId = this.providers.keys().next().value;
       this.activeProviderId = firstId ?? null;
+    }
+
+    // Restore persisted model override
+    const savedModelId = this.globalState.get<string>(ProviderRegistry.STATE_MODEL_KEY);
+    if (savedModelId && !this.activeModelOverride) {
+      this.activeModelOverride = savedModelId;
     }
 
     this._onDidChangeProviders.fire();
@@ -107,6 +121,7 @@ export class ProviderRegistry {
 
   setActiveModelId(modelId: string): void {
     this.activeModelOverride = modelId;
+    this.globalState.update(ProviderRegistry.STATE_MODEL_KEY, modelId);
     this._onDidChangeProviders.fire();
   }
 
@@ -116,6 +131,8 @@ export class ProviderRegistry {
     }
     this.activeProviderId = id;
     this.activeModelOverride = null;
+    this.globalState.update(ProviderRegistry.STATE_PROVIDER_KEY, id);
+    this.globalState.update(ProviderRegistry.STATE_MODEL_KEY, undefined);
     this._onDidChangeProviders.fire();
   }
 

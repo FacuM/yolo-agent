@@ -34,7 +34,7 @@ export async function activate(
 
   // Initialize profile manager and provider registry
   profileManager = new ProfileManager(context.globalState, context.secrets);
-  registry = new ProviderRegistry(profileManager);
+  registry = new ProviderRegistry(profileManager, context.globalState);
   await registry.initialize();
 
   // Initialize mode manager
