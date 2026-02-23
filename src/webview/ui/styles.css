@@ -192,25 +192,38 @@ body {
   border: 1px solid var(--vscode-panel-border);
   border-radius: 4px;
   overflow: hidden;
+  align-self: stretch;
 }
 
 .tool-call-header {
-  padding: 4px 8px;
-  background: var(--vscode-editor-lineHighlightBackground);
-  font-size: 0.9em;
+  padding: 6px 10px;
+  background: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  font-size: 0.85em;
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 6px;
+  min-height: 28px;
+  color: var(--vscode-foreground);
+}
+
+.tool-call-header:hover {
+  background: var(--vscode-list-hoverBackground);
 }
 
 .tool-call-header .icon {
   font-size: 0.8em;
   transition: transform 0.15s;
+  flex-shrink: 0;
 }
 
 .tool-call-header.expanded .icon {
   transform: rotate(90deg);
+}
+
+.tool-call-header strong {
+  color: var(--vscode-textLink-foreground);
 }
 
 .tool-call-content {
