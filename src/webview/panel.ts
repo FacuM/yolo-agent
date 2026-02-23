@@ -302,6 +302,12 @@ Rules:
     this.sendSessionList();
     this.sendSandboxState();
 
+    // Auto-restore the active session so the webview picks up where it left off
+    const activeSession = this.sessionManager.getActiveSession();
+    if (activeSession) {
+      this.handleSwitchSession(activeSession.id);
+    }
+
     // Re-send provider list after registry finishes re-initializing
     this.registry.onDidChangeProviders(() => {
       this.sendProviderList();
@@ -409,6 +415,8 @@ Rules:
     systemPromptOverride?: string,
     /** When true, read-only tools (listFiles, getDiagnostics, getSandboxStatus) are removed from the palette so weak LLMs cannot spin on them. */
     restrictReadOnlyTools?: boolean,
+    /** When true, messages added to history are marked as internal (hidden from replay). */
+    internal?: boolean,
   ): Promise<string> {
     const provider = this.registry.getActiveProvider()!;
 
@@ -471,7 +479,7 @@ Rules:
       { role: 'user', content: userText },
     ];
 
-    this.sessionManager.addMessage(sessionId, { role: 'user', content: userText });
+    this.sessionManager.addMessage(sessionId, { role: 'user', content: userText, internal });
     this.sessionManager.setSessionStatus(sessionId, 'busy');
 
     const abortCtrl = new AbortController();
@@ -528,6 +536,7 @@ Rules:
             role: 'assistant',
             content: response.content ?? '',
             toolCalls: response.toolCalls,
+            internal,
           };
           messages.push(assistantMsg);
           this.sessionManager.addMessage(sessionId, assistantMsg);
@@ -619,7 +628,7 @@ Rules:
           }
 
           // Add tool results to conversation + history so the LLM sees them
-          const toolResultsMsg: ChatMessage = { role: 'user', content: '', toolResults };
+          const toolResultsMsg: ChatMessage = { role: 'user', content: '', toolResults, internal };
           messages.push(toolResultsMsg);
           this.sessionManager.addMessage(sessionId, toolResultsMsg);
 
@@ -846,6 +855,9 @@ Rules:
     userText: string,
     fileReferences?: string[],
   ): Promise<void> {
+    // Save the original user message in history (visible in replay)
+    this.sessionManager.addMessage(sessionId, { role: 'user', content: userText });
+
     // Initialize smart-todo state
     this.sessionManager.initSmartTodo(sessionId, userText);
 
@@ -1088,7 +1100,8 @@ Rules:
 
       // Restrict read-only tools (listFiles, getDiagnostics, getSandboxStatus) during execution
       // so weak LLMs are forced to use writeFile/runTerminal instead of spinning on reads.
-      await this.sendOneLLMRound(sessionId, execUserMsg, undefined, execPrompt, true);
+      // Mark as internal so these orchestration messages don't appear in session replay.
+      await this.sendOneLLMRound(sessionId, execUserMsg, undefined, execPrompt, true, true);
 
       // Check if execution was productive: compare files after execution
       let executionProductive = false;
@@ -1387,16 +1400,34 @@ Rules:
     if (!session) { return; }
 
     // Replay session's conversation history to the webview
+    // Skip internal orchestration messages (marked by smart-todo flow)
     this.postMessage({ type: 'chatCleared' });
 
     for (const msg of session.history) {
       if (msg.role === 'system') { continue; }
+      if (msg.internal) { continue; }
+      // Skip empty tool-result messages (they have no visible content)
+      if (msg.role === 'user' && !msg.content && msg.toolResults) { continue; }
       this.postMessage({
         type: 'replayMessage',
         role: msg.role,
         content: msg.content,
       });
     }
+
+    // Restore smart-todo state if this session has an active plan
+    const smartTodo = this.sessionManager.getSmartTodo(sessionId);
+    if (smartTodo) {
+      this.postMessage({
+        type: 'smartTodoUpdate',
+        phase: smartTodo.phase,
+        todos: smartTodo.todos,
+        iteration: smartTodo.verifyIterations,
+      });
+    }
+
+    // Restore sandbox state
+    this.sendSandboxState();
 
     // Flush any buffered messages from background execution
     const buffered = this.sessionManager.drainBuffer(sessionId);

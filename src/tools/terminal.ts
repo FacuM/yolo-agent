@@ -4,6 +4,20 @@ import { Tool, ToolResult } from './types';
 import { SandboxManager } from '../sandbox/manager';
 import { spawn } from 'child_process';
 
+/**
+ * Normalize a cwd path to be relative so it resolves inside the sandbox worktree.
+ */
+function toRelativeCwd(cwd: string, workspaceRoot?: string): string {
+  let p = cwd;
+  if (workspaceRoot) {
+    const root = workspaceRoot.endsWith('/') ? workspaceRoot : workspaceRoot + '/';
+    if (p === workspaceRoot) { return '.'; }
+    if (p.startsWith(root)) { p = p.slice(root.length); }
+  }
+  p = p.replace(/^\/+/, '');
+  return p || '.';
+}
+
 /** Strip ANSI escape sequences from a string. */
 function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
@@ -110,7 +124,7 @@ Examples of commands needing higher timeouts:
       const info = this.sandboxManager.getSandboxInfo();
       if (info.isActive && info.config) {
         effectiveCwd = cwd
-          ? path.resolve(info.config.worktreePath, cwd)
+          ? path.resolve(info.config.worktreePath, toRelativeCwd(cwd, info.config.originalPath))
           : info.config.worktreePath;
       }
     }

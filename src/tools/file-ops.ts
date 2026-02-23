@@ -3,6 +3,25 @@ import * as path from 'path';
 import { Tool, ToolResult } from './types';
 import { SandboxManager } from '../sandbox/manager';
 
+/**
+ * Normalize a path to be relative so it resolves correctly inside a sandbox worktree.
+ * Strips leading slashes and removes workspace root prefixes that would cause
+ * path.resolve() to ignore the worktree base directory.
+ */
+function toRelativePath(filePath: string, workspaceRoot?: string): string {
+  let p = filePath;
+  // Strip workspace root prefix if present (e.g. "/home/user/project/src/foo.ts" → "src/foo.ts")
+  if (workspaceRoot) {
+    const root = workspaceRoot.endsWith('/') ? workspaceRoot : workspaceRoot + '/';
+    if (p.startsWith(root)) {
+      p = p.slice(root.length);
+    }
+  }
+  // Strip leading slashes so path.resolve treats it as relative
+  p = p.replace(/^\/+/, '');
+  return p;
+}
+
 export class ReadFileTool implements Tool {
   definition = {
     name: 'readFile',
@@ -40,7 +59,8 @@ export class ReadFileTool implements Tool {
       const info = this.sandboxManager.getSandboxInfo();
       if (info.isActive && info.config) {
         const fs = await import('fs/promises');
-        const fullPath = path.resolve(info.config.worktreePath, filePath);
+        const safePath = toRelativePath(filePath, info.config.originalPath);
+        const fullPath = path.resolve(info.config.worktreePath, safePath);
         try {
           let text = await fs.readFile(fullPath, 'utf-8');
           if (startLine !== undefined || endLine !== undefined) {
@@ -132,7 +152,8 @@ export class WriteFileTool implements Tool {
 
         // Write to the sandbox worktree instead of the main workspace
         const fs = await import('fs/promises');
-        const fullPath = path.resolve(info.config.worktreePath, filePath);
+        const safePath = toRelativePath(filePath, info.config.originalPath);
+        const fullPath = path.resolve(info.config.worktreePath, safePath);
         try {
           await fs.mkdir(path.dirname(fullPath), { recursive: true });
           await fs.writeFile(fullPath, content, 'utf-8');
@@ -207,7 +228,8 @@ export class ListFilesTool implements Tool {
         const fs = await import('fs/promises');
         const { glob } = await import('glob');
         try {
-          const matches = await glob(pattern, {
+          const safePattern = toRelativePath(pattern, info.config.originalPath);
+          const matches = await glob(safePattern, {
             cwd: info.config.worktreePath,
             ignore: exclude ? [exclude] : ['**/node_modules/**'],
             nodir: true,

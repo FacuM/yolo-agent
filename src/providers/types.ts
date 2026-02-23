@@ -3,6 +3,8 @@ export interface ChatMessage {
   content: string;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
+  /** Internal orchestration message — kept in LLM context but hidden from UI replay. */
+  internal?: boolean;
 }
 
 export interface ToolCall {

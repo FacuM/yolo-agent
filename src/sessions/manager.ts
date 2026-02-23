@@ -8,6 +8,12 @@ export interface SessionMessage {
   content: string;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
+  /**
+   * When true, this message is internal orchestration (e.g. "Please implement the plan now...")
+   * and should not be shown when replaying the session history in the UI.
+   * The message is still included in the LLM context.
+   */
+  internal?: boolean;
 }
 
 /**

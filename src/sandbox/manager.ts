@@ -679,9 +679,21 @@ export class SandboxManager {
       return { allowed: true };
     }
 
+    // Normalize path: strip workspace root prefix and leading slashes so
+    // absolute paths from the LLM don't escape the worktree
+    let safePath = filePath;
+    const origRoot = this.currentSandbox.originalPath;
+    const rootPrefix = origRoot.endsWith('/') ? origRoot : origRoot + '/';
+    if (safePath.startsWith(rootPrefix)) {
+      safePath = safePath.slice(rootPrefix.length);
+    } else if (safePath === origRoot) {
+      safePath = '.';
+    }
+    safePath = safePath.replace(/^\/+/, '');
+
     const resolvedPath = path.resolve(
       this.currentSandbox.worktreePath,
-      filePath
+      safePath
     );
 
     if (!resolvedPath.startsWith(this.currentSandbox.worktreePath)) {
