@@ -619,6 +619,172 @@ export class SandboxManager {
     return `Sandbox${isolationType}: ${this.currentSandbox.branchName} @ ${this.currentSandbox.worktreePath}`;
   }
 
+  /**
+   * Get a summary of changes in the sandbox worktree vs the base branch.
+   * Returns a list of changed files with their status.
+   */
+  async getSandboxDiff(): Promise<{ files: { status: string; path: string }[]; summary: string }> {
+    if (!this.currentSandbox) {
+      return { files: [], summary: 'No active sandbox' };
+    }
+
+    const { worktreePath, branchName } = this.currentSandbox;
+
+    try {
+      // Commit any uncommitted changes first so diff is accurate
+      try {
+        const { stdout: status } = await execAsync('git status --porcelain', { cwd: worktreePath });
+        if (status.trim()) {
+          await execAsync('git add -A && git commit -m "sandbox: auto-commit pending changes"', { cwd: worktreePath });
+        }
+      } catch {
+        // Ignore commit failures
+      }
+
+      // Get the merge-base to diff against
+      const { stdout: mergeBase } = await execAsync(
+        `git merge-base HEAD ${branchName}`,
+        { cwd: this.currentSandbox.originalPath }
+      ).catch(() => ({ stdout: 'HEAD' }));
+
+      // Get diff stat from the worktree
+      const { stdout: diffStat } = await execAsync(
+        'git diff --stat HEAD~1 HEAD 2>/dev/null || git diff --stat --cached HEAD 2>/dev/null || echo "(no changes)"',
+        { cwd: worktreePath }
+      );
+
+      // Get list of changed files
+      const { stdout: diffFiles } = await execAsync(
+        'git diff --name-status HEAD~1 HEAD 2>/dev/null || git diff --name-status --cached HEAD 2>/dev/null || true',
+        { cwd: worktreePath }
+      );
+
+      const files = diffFiles.trim().split('\n').filter(l => l.trim()).map(line => {
+        const [status, ...pathParts] = line.split('\t');
+        return { status: status.trim(), path: pathParts.join('\t').trim() };
+      }).filter(f => f.path);
+
+      return {
+        files,
+        summary: diffStat.trim() || '(no changes)',
+      };
+    } catch {
+      return { files: [], summary: 'Unable to compute diff' };
+    }
+  }
+
+  /**
+   * Apply sandbox changes: merge the sandbox branch into the original branch,
+   * then clean up the worktree and branch.
+   */
+  async applySandbox(): Promise<{ success: boolean; message: string }> {
+    if (!this.currentSandbox) {
+      return { success: false, message: 'No active sandbox to apply.' };
+    }
+
+    const { worktreePath, branchName, originalPath } = this.currentSandbox;
+
+    try {
+      // Commit any uncommitted changes in the worktree
+      try {
+        const { stdout: status } = await execAsync('git status --porcelain', { cwd: worktreePath });
+        if (status.trim()) {
+          await execAsync('git add -A && git commit -m "sandbox: final changes"', { cwd: worktreePath });
+        }
+      } catch {
+        // Ignore
+      }
+
+      // Clean up OS-level sandbox
+      if (this.osLevelSandbox?.isActive()) {
+        await this.osLevelSandbox.cleanup();
+      }
+
+      // Remove the worktree (must happen before merge to release the branch lock)
+      await execAsync(`git worktree remove "${worktreePath}" --force`, { cwd: originalPath });
+
+      // Get the current branch in the original workspace
+      const { stdout: currentBranch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: originalPath });
+
+      // Merge the sandbox branch into the current branch
+      await execAsync(`git merge "${branchName}" --no-edit`, { cwd: originalPath });
+
+      // Delete the sandbox branch now that it's merged
+      try {
+        await execAsync(`git branch -d "${branchName}"`, { cwd: originalPath });
+      } catch {
+        // Branch delete might fail if not fully merged; try force-delete
+        try {
+          await execAsync(`git branch -D "${branchName}"`, { cwd: originalPath });
+        } catch { /* ignore */ }
+      }
+
+      this.currentSandbox = null;
+      this._onDidChangeSandbox.fire(this.getSandboxInfo());
+
+      return {
+        success: true,
+        message: `Sandbox branch "${branchName}" merged into "${currentBranch.trim()}" and cleaned up.`,
+      };
+    } catch (err) {
+      // If merge failed, try to recover
+      this.currentSandbox = null;
+      this._onDidChangeSandbox.fire(this.getSandboxInfo());
+
+      return {
+        success: false,
+        message: `Merge failed: ${err instanceof Error ? err.message : String(err)}. The branch "${branchName}" has been kept for manual resolution.`,
+      };
+    }
+  }
+
+  /**
+   * Discard sandbox changes: remove the worktree and delete the branch.
+   */
+  async discardSandbox(): Promise<{ success: boolean; message: string }> {
+    if (!this.currentSandbox) {
+      return { success: false, message: 'No active sandbox to discard.' };
+    }
+
+    const { worktreePath, branchName, originalPath } = this.currentSandbox;
+
+    try {
+      // Clean up OS-level sandbox
+      if (this.osLevelSandbox?.isActive()) {
+        await this.osLevelSandbox.cleanup();
+      }
+
+      // Remove the worktree
+      await execAsync(`git worktree remove "${worktreePath}" --force`, { cwd: originalPath });
+
+      // Delete the branch
+      try {
+        await execAsync(`git branch -D "${branchName}"`, { cwd: originalPath });
+      } catch {
+        // Branch might already be gone
+      }
+
+      // Prune any stale worktree references
+      await execAsync('git worktree prune', { cwd: originalPath }).catch(() => {});
+
+      this.currentSandbox = null;
+      this._onDidChangeSandbox.fire(this.getSandboxInfo());
+
+      return {
+        success: true,
+        message: `Sandbox discarded. Branch "${branchName}" and worktree removed.`,
+      };
+    } catch (err) {
+      this.currentSandbox = null;
+      this._onDidChangeSandbox.fire(this.getSandboxInfo());
+
+      return {
+        success: false,
+        message: `Cleanup failed: ${err instanceof Error ? err.message : String(err)}. You may need to manually run: git worktree remove "${worktreePath}" && git branch -D "${branchName}"`,
+      };
+    }
+  }
+
   dispose() {
     this._onDidChangeSandbox.dispose();
   }

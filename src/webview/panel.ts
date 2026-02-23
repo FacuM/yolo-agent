@@ -283,6 +283,14 @@ Rules:
         case 'readFileReference':
           await this.handleReadFileReference(message.path);
           break;
+
+        // Sandbox apply/discard
+        case 'applySandbox':
+          await this.handleApplySandbox();
+          break;
+        case 'discardSandbox':
+          await this.handleDiscardSandbox();
+          break;
       }
     });
 
@@ -1094,6 +1102,7 @@ Rules:
             content: '\n\n\u26A0\uFE0F **Agent failed to produce files after 2 consecutive execution rounds. Stopping plan loop.**\n' +
               'The model may not be capable of completing this task. Try a different model or break the request into simpler steps.\n',
           });
+          await this.sendSandboxResult(sessionId);
           this.postSessionMessage(sessionId, { type: 'messageComplete' });
           break;
         }
@@ -1168,6 +1177,7 @@ Rules:
           type: 'streamChunk',
           content: `\n\n\u2705 **All TODOs verified complete after ${iteration} iteration(s).**\n`,
         });
+        await this.sendSandboxResult(sessionId);
         this.postSessionMessage(sessionId, { type: 'messageComplete' });
         break;
       }
@@ -1180,6 +1190,7 @@ Rules:
           type: 'streamChunk',
           content: `\n\n\u26A0\uFE0F **Reached max iterations (${maxIter}).** Remaining items:\n${summary}\n`,
         });
+        await this.sendSandboxResult(sessionId);
         this.postSessionMessage(sessionId, { type: 'messageComplete' });
         break;
       }
@@ -1729,6 +1740,66 @@ Rules:
   }
 
   /**
+   * Apply sandbox changes: merge into main branch and clean up.
+   */
+  private async handleApplySandbox(): Promise<void> {
+    if (!this.sandboxManager) { return; }
+
+    this.postMessage({ type: 'sandboxActionStarted', action: 'apply' });
+
+    const result = await this.sandboxManager.applySandbox();
+
+    this.postMessage({
+      type: 'sandboxActionResult',
+      action: 'apply',
+      success: result.success,
+      message: result.message,
+    });
+
+    this.sendSandboxState();
+  }
+
+  /**
+   * Discard sandbox changes: remove worktree and delete branch.
+   */
+  private async handleDiscardSandbox(): Promise<void> {
+    if (!this.sandboxManager) { return; }
+
+    this.postMessage({ type: 'sandboxActionStarted', action: 'discard' });
+
+    const result = await this.sandboxManager.discardSandbox();
+
+    this.postMessage({
+      type: 'sandboxActionResult',
+      action: 'discard',
+      success: result.success,
+      message: result.message,
+    });
+
+    this.sendSandboxState();
+  }
+
+  /**
+   * Send a sandbox result card to the webview after the plan loop finishes.
+   * Shows changed files and Apply/Undo buttons.
+   */
+  private async sendSandboxResult(sessionId: string): Promise<void> {
+    if (!this.sandboxManager) { return; }
+    const info = this.sandboxManager.getSandboxInfo();
+    if (!info.isActive || !info.config) { return; }
+
+    const diff = await this.sandboxManager.getSandboxDiff();
+
+    this.postSessionMessage(sessionId, {
+      type: 'sandboxResult',
+      branchName: info.config.branchName,
+      worktreePath: info.config.worktreePath,
+      files: diff.files,
+      summary: diff.summary,
+    });
+  }
+
+  /**
    * Send the current sandbox state to the webview.
    */
   private sendSandboxState(): void {
@@ -1852,6 +1923,20 @@ Rules:
             <span class="sandbox-activity-dot"></span>
           </div>
           <div id="sandbox-file-list" class="sandbox-file-list"></div>
+        </div>
+        <div id="sandbox-result" class="sandbox-result hidden">
+          <div class="sandbox-result-header">
+            <span class="sandbox-result-icon">\u{1F4E6}</span>
+            <span class="sandbox-result-title">Sandbox Complete</span>
+          </div>
+          <div id="sandbox-result-branch" class="sandbox-result-branch"></div>
+          <div id="sandbox-result-files" class="sandbox-result-files"></div>
+          <div id="sandbox-result-summary" class="sandbox-result-summary"></div>
+          <div class="sandbox-result-actions">
+            <button id="sandbox-apply-btn" class="sandbox-btn sandbox-btn-apply" title="Merge sandbox branch into your main branch">\u2714 Apply</button>
+            <button id="sandbox-discard-btn" class="sandbox-btn sandbox-btn-discard" title="Delete the sandbox branch and worktree">\u2716 Discard</button>
+          </div>
+          <div id="sandbox-action-status" class="sandbox-action-status hidden"></div>
         </div>
         <div id="queue-section" class="hidden">
           <div class="queue-header">

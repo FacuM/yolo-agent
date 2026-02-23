@@ -68,6 +68,15 @@
   const sandboxBranchName = document.getElementById('sandbox-branch-name');
   const sandboxFileList = document.getElementById('sandbox-file-list');
 
+  // ===== Sandbox Result Elements =====
+  const sandboxResult = document.getElementById('sandbox-result');
+  const sandboxResultBranch = document.getElementById('sandbox-result-branch');
+  const sandboxResultFiles = document.getElementById('sandbox-result-files');
+  const sandboxResultSummary = document.getElementById('sandbox-result-summary');
+  const sandboxApplyBtn = document.getElementById('sandbox-apply-btn');
+  const sandboxDiscardBtn = document.getElementById('sandbox-discard-btn');
+  const sandboxActionStatus = document.getElementById('sandbox-action-status');
+
   // ===== Settings View Elements =====
   const settingsBackBtn = document.getElementById('settings-back-btn');
   const profilesList = document.getElementById('profiles-list');
@@ -641,6 +650,15 @@
       case 'fileActivity':
         handleFileActivity(message);
         break;
+      case 'sandboxResult':
+        handleSandboxResult(message);
+        break;
+      case 'sandboxActionStarted':
+        handleSandboxActionStarted(message);
+        break;
+      case 'sandboxActionResult':
+        handleSandboxActionResult(message);
+        break;
 
       // Settings messages
       case 'profiles':
@@ -933,6 +951,7 @@
       sandboxBranchName.title = branchDisplay;
     } else {
       sandboxActivity.classList.add('hidden');
+      sandboxResult.classList.add('hidden');
       fileActivityEntries = [];
       sandboxFileList.textContent = '';
     }
@@ -1023,6 +1042,94 @@
       dot._pulseTimer = setTimeout(function() { dot.classList.remove('pulsing'); }, 2000);
     }
   }
+
+  // ===== Sandbox Result Card =====
+
+  function handleSandboxResult(message) {
+    // Show the result card, hide the activity tracker
+    sandboxActivity.classList.add('hidden');
+    sandboxResult.classList.remove('hidden');
+
+    // Branch name
+    sandboxResultBranch.textContent = message.branchName || 'sandbox';
+
+    // Changed files list
+    sandboxResultFiles.textContent = '';
+    var statusLabels = { A: 'A', M: 'M', D: 'D', R: 'R', C: 'C' };
+    var statusClasses = { A: 'added', M: 'modified', D: 'deleted', R: 'modified', C: 'added' };
+
+    if (message.files && message.files.length > 0) {
+      message.files.forEach(function(f) {
+        var row = document.createElement('div');
+        row.className = 'sandbox-result-file';
+
+        var statusEl = document.createElement('span');
+        var statusChar = f.status.charAt(0).toUpperCase();
+        statusEl.className = 'sandbox-result-file-status ' + (statusClasses[statusChar] || 'modified');
+        statusEl.textContent = statusLabels[statusChar] || statusChar;
+        statusEl.title = f.status;
+
+        var pathEl = document.createElement('span');
+        pathEl.className = 'sandbox-result-file-path';
+        pathEl.textContent = f.path;
+        pathEl.title = f.path;
+
+        row.appendChild(statusEl);
+        row.appendChild(pathEl);
+        sandboxResultFiles.appendChild(row);
+      });
+    } else {
+      var emptyEl = document.createElement('div');
+      emptyEl.style.fontSize = '11px';
+      emptyEl.style.color = 'var(--vscode-descriptionForeground)';
+      emptyEl.textContent = 'No file changes detected';
+      sandboxResultFiles.appendChild(emptyEl);
+    }
+
+    // Summary
+    sandboxResultSummary.textContent = message.summary || '';
+
+    // Reset buttons
+    sandboxApplyBtn.disabled = false;
+    sandboxDiscardBtn.disabled = false;
+    sandboxActionStatus.classList.add('hidden');
+    sandboxActionStatus.className = 'sandbox-action-status hidden';
+  }
+
+  function handleSandboxActionStarted(message) {
+    sandboxApplyBtn.disabled = true;
+    sandboxDiscardBtn.disabled = true;
+    sandboxActionStatus.textContent = message.action === 'apply' ? 'Applying changes\u2026' : 'Discarding sandbox\u2026';
+    sandboxActionStatus.className = 'sandbox-action-status loading';
+  }
+
+  function handleSandboxActionResult(message) {
+    sandboxApplyBtn.disabled = true;
+    sandboxDiscardBtn.disabled = true;
+
+    if (message.success) {
+      sandboxActionStatus.className = 'sandbox-action-status success';
+      sandboxActionStatus.textContent = message.message;
+      // Hide the result card after a delay
+      setTimeout(function() {
+        sandboxResult.classList.add('hidden');
+      }, 5000);
+    } else {
+      sandboxActionStatus.className = 'sandbox-action-status error';
+      sandboxActionStatus.textContent = message.message;
+      // Re-enable buttons so user can retry
+      sandboxApplyBtn.disabled = false;
+      sandboxDiscardBtn.disabled = false;
+    }
+  }
+
+  sandboxApplyBtn.addEventListener('click', function() {
+    vscode.postMessage({ type: 'applySandbox' });
+  });
+
+  sandboxDiscardBtn.addEventListener('click', function() {
+    vscode.postMessage({ type: 'discardSandbox' });
+  });
 
   function renderSessionList(sessions, activeSessionId) {
     sessionsList.textContent = '';
