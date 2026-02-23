@@ -138,7 +138,8 @@ export async function activate(
     tools,
     contextManager,
     mcpConfigManager,
-    mcpClient
+    mcpClient,
+    sandboxManager
   );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(

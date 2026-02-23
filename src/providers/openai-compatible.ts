@@ -52,6 +52,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
       },
     }));
 
+    const requestOptions: Record<string, unknown> = {};
+    if (options.signal) {
+      requestOptions.signal = options.signal;
+    }
+
     const stream = await this.client.chat.completions.create({
       model: options.model,
       max_tokens: options.maxTokens ?? 4096,
@@ -59,7 +64,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       messages: openaiMessages,
       tools: tools?.length ? tools : undefined,
       stream: true,
-    });
+    }, requestOptions);
 
     let fullContent = '';
     let reasoningContent = '';

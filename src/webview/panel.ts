@@ -10,6 +10,7 @@ import { McpClient } from '../mcp/client';
 import { McpServerConfig } from '../mcp/types';
 import { SessionManager, BufferedMessage, TodoItem, TodoItemStatus, SmartTodoPlan } from '../sessions/manager';
 import { AskQuestionTool } from '../tools/question';
+import { SandboxManager } from '../sandbox/manager';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'yoloAgent.chatView';
@@ -99,6 +100,7 @@ Rules:
   private mcpClient: McpClient;
   private activeFileContext: { path: string; content: string } | null = null;
   private activeFileEnabled = false;
+  private sandboxManager?: SandboxManager;
 
   constructor(
     extensionUri: vscode.Uri,
@@ -108,7 +110,8 @@ Rules:
     tools: Map<string, Tool>,
     contextManager: ContextManager,
     mcpConfigManager: McpConfigManager,
-    mcpClient: McpClient
+    mcpClient: McpClient,
+    sandboxManager?: SandboxManager
   ) {
     this.extensionUri = extensionUri;
     this.registry = registry;
@@ -118,6 +121,7 @@ Rules:
     this.contextManager = contextManager;
     this.mcpConfigManager = mcpConfigManager;
     this.mcpClient = mcpClient;
+    this.sandboxManager = sandboxManager;
     this.sessionManager = new SessionManager();
 
     // Notify webview whenever session list changes
@@ -271,11 +275,19 @@ Rules:
     this.handleGetModes();
     this.handleGetContext();
     this.sendSessionList();
+    this.sendSandboxState();
 
     // Re-send provider list after registry finishes re-initializing
     this.registry.onDidChangeProviders(() => {
       this.sendProviderList();
     });
+
+    // Listen for sandbox state changes
+    if (this.sandboxManager) {
+      this.sandboxManager.onDidChangeSandbox(() => {
+        this.sendSandboxState();
+      });
+    }
 
     // Track active editor for file context
     const updateActiveFile = (editor: vscode.TextEditor | undefined) => {
@@ -432,7 +444,7 @@ Rules:
 
       const response = await provider.sendMessage(
         messages,
-        { model, tools: allowedTools },
+        { model, tools: allowedTools, signal: abortCtrl.signal },
         (chunk) => {
           if (!firstChunkReceived) {
             firstChunkReceived = true;
@@ -456,6 +468,9 @@ Rules:
             name: toolCall.name,
             id: toolCall.id,
           });
+
+          // Emit file activity for sandbox progress tracking
+          this.emitFileActivity(sessionId, toolCall.name, toolCall.arguments);
 
           const tool = this.tools.get(toolCall.name);
           if (tool) {
@@ -523,6 +538,17 @@ Rules:
       }
       this.sessionManager.setSessionStatus(sessionId, 'idle');
     } catch (err) {
+      // Handle abort/cancellation gracefully
+      if (abortCtrl.signal.aborted || (err instanceof Error && (err.name === 'AbortError' || err.message.includes('abort')))) {
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: '\n\n*[Generation stopped]*',
+        });
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        this.sessionManager.setSessionStatus(sessionId, 'idle');
+        return '[CANCELLED]';
+      }
+
       const errMsg = err instanceof Error ? err.message : String(err);
       this.postSessionMessage(sessionId, {
         type: 'error',
@@ -562,9 +588,11 @@ Rules:
     let responseText = '';
     let firstChunkReceived = false;
     try {
+      // Use the session's abort controller if available
+      const abortCtrl = this.abortControllers.get(sessionId);
       const response = await provider.sendMessage(
         messages,
-        { model },  // no tools!
+        { model, signal: abortCtrl?.signal },  // no tools!
         (chunk) => {
           if (!firstChunkReceived) {
             firstChunkReceived = true;
@@ -1331,6 +1359,87 @@ Rules:
 
   // --- Helpers ---
 
+  /**
+   * Extract file paths from tool arguments and emit a fileActivity message
+   * so the webview can show which files the model is working on.
+   */
+  private emitFileActivity(
+    sessionId: string,
+    toolName: string,
+    args: Record<string, unknown>
+  ): void {
+    // Only emit when sandbox is active
+    if (!this.sandboxManager || !this.sandboxManager.getSandboxInfo().isActive) {
+      return;
+    }
+
+    let filePath: string | undefined;
+    let action: 'read' | 'write' | 'list' | 'command' | 'sandbox' = 'command';
+
+    switch (toolName) {
+      case 'readFile':
+        filePath = args.path as string | undefined;
+        action = 'read';
+        break;
+      case 'writeFile':
+        filePath = args.path as string | undefined;
+        action = 'write';
+        break;
+      case 'listFiles':
+        filePath = args.pattern as string | undefined;
+        action = 'list';
+        break;
+      case 'runTerminal':
+      case 'runSandboxedCommand':
+        filePath = args.command as string | undefined;
+        action = 'command';
+        break;
+      case 'createSandbox':
+      case 'exitSandbox':
+      case 'getSandboxStatus':
+        filePath = toolName;
+        action = 'sandbox';
+        break;
+      case 'getDiagnostics':
+        filePath = (args.path as string | undefined) ?? 'workspace';
+        action = 'read';
+        break;
+      default:
+        // For any other tool (including MCP tools), show the tool name
+        filePath = toolName;
+        action = 'command';
+        break;
+    }
+
+    if (!filePath) { return; }
+
+    this.postSessionMessage(sessionId, {
+      type: 'fileActivity',
+      file: filePath,
+      action,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Send the current sandbox state to the webview.
+   */
+  private sendSandboxState(): void {
+    if (!this.sandboxManager) {
+      this.postMessage({ type: 'sandboxState', active: false });
+      return;
+    }
+
+    const info = this.sandboxManager.getSandboxInfo();
+    this.postMessage({
+      type: 'sandboxState',
+      active: info.isActive,
+      branchName: info.config?.branchName ?? null,
+      worktreePath: info.config?.worktreePath ?? null,
+      osIsolation: info.osLevelIsolation,
+    });
+  }
+
   private sendProviderList(): void {
     this.postMessage({
       type: 'providers',
@@ -1427,6 +1536,14 @@ Rules:
             <span class="spinner-dot"></span> Waiting for API...
           </span>
           <button id="stop-btn" class="stop-btn" title="Stop generation" disabled>\u25A0</button>
+        </div>
+        <div id="sandbox-activity" class="sandbox-activity hidden">
+          <div class="sandbox-activity-header">
+            <span class="sandbox-activity-icon">\u{1F6E1}</span>
+            <span id="sandbox-branch-name" class="sandbox-branch">sandbox</span>
+            <span class="sandbox-activity-dot"></span>
+          </div>
+          <div id="sandbox-file-list" class="sandbox-file-list"></div>
         </div>
         <div id="queue-section" class="hidden">
           <div class="queue-header">

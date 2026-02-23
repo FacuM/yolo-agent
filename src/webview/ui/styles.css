@@ -191,7 +191,6 @@ body {
   margin: 6px 0;
   border: 1px solid var(--vscode-panel-border);
   border-radius: 4px;
-  overflow: hidden;
   align-self: stretch;
 }
 
@@ -232,9 +231,11 @@ body {
   font-family: var(--vscode-editor-font-family);
   font-size: 0.9em;
   white-space: pre-wrap;
-  max-height: 200px;
+  word-break: break-word;
+  max-height: 400px;
   overflow-y: auto;
   background: var(--vscode-editor-background);
+  border-top: 1px solid var(--vscode-panel-border);
 }
 
 .tool-call-content.visible {
@@ -615,6 +616,115 @@ body {
 
 .steering-btn:active {
   transform: scale(0.95);
+}
+
+/* ===== Sandbox File Activity Tracker ===== */
+.sandbox-activity {
+  margin-top: 6px;
+  padding: 6px 4px 4px;
+  border-top: 1px solid var(--vscode-panel-border);
+  animation: slideDown 0.2s ease;
+}
+
+.sandbox-activity.hidden {
+  display: none;
+}
+
+.sandbox-activity-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+.sandbox-activity-icon {
+  font-size: 11px;
+}
+
+.sandbox-branch {
+  color: var(--vscode-textLink-foreground);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-activity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
+  opacity: 0.3;
+  transition: opacity 0.3s;
+}
+
+.sandbox-activity-dot.pulsing {
+  opacity: 1;
+  background: var(--vscode-charts-green, #89d185);
+  animation: pulse 0.8s ease-in-out 2;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.4); }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.sandbox-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sandbox-file-entry {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  transition: opacity 0.5s ease, background 0.2s;
+}
+
+.sandbox-file-entry.active {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.sandbox-file-entry:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.sandbox-file-icon {
+  font-size: 10px;
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+
+.sandbox-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+}
+
+.sandbox-file-entry.active .sandbox-file-name {
+  color: var(--vscode-textLink-foreground);
+  font-weight: 500;
 }
 
 /* Queue section */

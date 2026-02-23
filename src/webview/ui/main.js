@@ -58,6 +58,11 @@
   const fileChips = document.getElementById('file-chips');
   const autocompleteDropdown = document.getElementById('autocomplete-dropdown');
 
+  // ===== Sandbox Activity Elements =====
+  const sandboxActivity = document.getElementById('sandbox-activity');
+  const sandboxBranchName = document.getElementById('sandbox-branch-name');
+  const sandboxFileList = document.getElementById('sandbox-file-list');
+
   // ===== Settings View Elements =====
   const settingsBackBtn = document.getElementById('settings-back-btn');
   const profilesList = document.getElementById('profiles-list');
@@ -524,6 +529,14 @@
         renderSmartTodoTracker(message.phase, message.todos || [], message.iteration || 0);
         break;
 
+      // Sandbox activity messages
+      case 'sandboxState':
+        handleSandboxState(message);
+        break;
+      case 'fileActivity':
+        handleFileActivity(message);
+        break;
+
       // Settings messages
       case 'profiles':
         profiles = message.profiles;
@@ -795,6 +808,115 @@
       list.appendChild(item);
     }
     tracker.appendChild(list);
+  }
+
+  // ===== Sandbox File Activity =====
+
+  var sandboxActive = false;
+  var fileActivityEntries = []; // { file, action, timestamp }
+  var FILE_ACTIVITY_MAX = 8;
+  var FILE_ACTIVITY_FADE_MS = 30000; // fade after 30s
+
+  function handleSandboxState(message) {
+    sandboxActive = message.active;
+    if (sandboxActive) {
+      sandboxActivity.classList.remove('hidden');
+      var branchDisplay = message.branchName || 'sandbox';
+      // Show just the last part of the branch name for brevity
+      var parts = branchDisplay.split('/');
+      sandboxBranchName.textContent = parts.length > 1 ? parts.slice(1).join('/') : branchDisplay;
+      sandboxBranchName.title = branchDisplay;
+    } else {
+      sandboxActivity.classList.add('hidden');
+      fileActivityEntries = [];
+      sandboxFileList.textContent = '';
+    }
+  }
+
+  function handleFileActivity(message) {
+    if (!sandboxActive) { return; }
+
+    var entry = {
+      file: message.file,
+      action: message.action,
+      timestamp: message.timestamp || Date.now(),
+    };
+
+    // Avoid duplicate consecutive entries for the same file+action
+    var last = fileActivityEntries[0];
+    if (last && last.file === entry.file && last.action === entry.action) {
+      last.timestamp = entry.timestamp;
+      renderFileActivity();
+      return;
+    }
+
+    // Add to front
+    fileActivityEntries.unshift(entry);
+
+    // Trim to max
+    if (fileActivityEntries.length > FILE_ACTIVITY_MAX) {
+      fileActivityEntries = fileActivityEntries.slice(0, FILE_ACTIVITY_MAX);
+    }
+
+    renderFileActivity();
+  }
+
+  function renderFileActivity() {
+    sandboxFileList.textContent = '';
+    var now = Date.now();
+
+    var actionIcons = {
+      read: '\u{1F4D6}',     // open book
+      write: '\u270F\uFE0F', // pencil
+      list: '\u{1F4C2}',     // open folder
+      command: '\u25B8',      // play/terminal
+      sandbox: '\u{1F6E1}',  // shield
+    };
+
+    for (var i = 0; i < fileActivityEntries.length; i++) {
+      var entry = fileActivityEntries[i];
+      var age = now - entry.timestamp;
+      var opacity = age > FILE_ACTIVITY_FADE_MS ? 0.3 : (1 - (age / FILE_ACTIVITY_FADE_MS) * 0.5);
+
+      var row = document.createElement('div');
+      row.className = 'sandbox-file-entry';
+      if (i === 0) { row.classList.add('active'); }
+      row.style.opacity = Math.max(0.3, opacity).toFixed(2);
+
+      var icon = document.createElement('span');
+      icon.className = 'sandbox-file-icon';
+      icon.textContent = actionIcons[entry.action] || '\u2022';
+
+      var name = document.createElement('span');
+      name.className = 'sandbox-file-name';
+      // Shorten long paths: show just filename or last 2 segments
+      var displayName = entry.file;
+      if (entry.action !== 'command') {
+        var segs = displayName.split('/');
+        if (segs.length > 2) {
+          displayName = '\u2026/' + segs.slice(-2).join('/');
+        }
+      } else {
+        // For commands, truncate long strings
+        if (displayName.length > 40) {
+          displayName = displayName.slice(0, 37) + '\u2026';
+        }
+      }
+      name.textContent = displayName;
+      name.title = entry.file;
+
+      row.appendChild(icon);
+      row.appendChild(name);
+      sandboxFileList.appendChild(row);
+    }
+
+    // Show the activity dot animation on the most recent entry
+    var dot = sandboxActivity.querySelector('.sandbox-activity-dot');
+    if (dot && fileActivityEntries.length > 0) {
+      dot.classList.add('pulsing');
+      clearTimeout(dot._pulseTimer);
+      dot._pulseTimer = setTimeout(function() { dot.classList.remove('pulsing'); }, 2000);
+    }
   }
 
   function renderSessionList(sessions, activeSessionId) {

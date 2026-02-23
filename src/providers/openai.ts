@@ -38,6 +38,11 @@ export class OpenAIProvider implements LLMProvider {
       },
     }));
 
+    const requestOptions: Record<string, unknown> = {};
+    if (options.signal) {
+      requestOptions.signal = options.signal;
+    }
+
     const stream = await this.client.chat.completions.create({
       model: options.model || 'gpt-4o',
       max_tokens: options.maxTokens ?? 4096,
@@ -45,7 +50,7 @@ export class OpenAIProvider implements LLMProvider {
       messages: openaiMessages,
       tools: tools?.length ? tools : undefined,
       stream: true,
-    });
+    }, requestOptions);
 
     let fullContent = '';
     let reasoningContent = '';

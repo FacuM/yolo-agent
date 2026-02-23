@@ -40,6 +40,11 @@ export class AnthropicProvider implements LLMProvider {
       input_schema: t.parameters as Anthropic.Tool['input_schema'],
     }));
 
+    const requestOptions: Record<string, unknown> = {};
+    if (options.signal) {
+      requestOptions.signal = options.signal;
+    }
+
     const stream = this.client.messages.stream({
       model: options.model || 'claude-sonnet-4-20250514',
       max_tokens: options.maxTokens ?? 4096,
@@ -47,7 +52,7 @@ export class AnthropicProvider implements LLMProvider {
       system: systemMessage?.content,
       messages: anthropicMessages,
       tools,
-    });
+    }, requestOptions);
 
     let fullContent = '';
     let thinkingContent = '';
