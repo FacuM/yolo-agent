@@ -50,6 +50,7 @@ export class AnthropicProvider implements LLMProvider {
     });
 
     let fullContent = '';
+    let thinkingContent = '';
     const toolCalls: ToolCall[] = [];
 
     stream.on('text', (text) => {
@@ -57,10 +58,13 @@ export class AnthropicProvider implements LLMProvider {
       onChunk(text);
     });
 
+    // Extended thinking is not streamed, collect from final message
     const finalMessage = await stream.finalMessage();
 
     for (const block of finalMessage.content) {
-      if (block.type === 'tool_use') {
+      if (block.type === 'thinking') {
+        thinkingContent += block.thinking;
+      } else if (block.type === 'tool_use') {
         toolCalls.push({
           id: block.id,
           name: block.name,
@@ -71,6 +75,7 @@ export class AnthropicProvider implements LLMProvider {
 
     return {
       content: fullContent,
+      thinking: thinkingContent || undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: {
         inputTokens: finalMessage.usage.input_tokens,
