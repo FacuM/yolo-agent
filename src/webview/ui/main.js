@@ -219,6 +219,9 @@
       case 'streamChunk':
         handleStreamChunk(message.content);
         break;
+      case 'thinking':
+        handleThinking(message.content);
+        break;
       case 'toolCallStarted':
         handleToolCallStarted(message.name, message.id);
         break;
@@ -515,6 +518,57 @@
         header.addEventListener('click', toggleHandler);
       }
       const contentEl = card.querySelector('.tool-call-content');
+      if (contentEl) {
+        contentEl.textContent = content;
+      }
+    }
+    scrollToBottom();
+  }
+
+  function handleThinking(content) {
+    if (!currentAssistantEl) {
+      currentAssistantEl = appendMessage('assistant', '');
+    }
+
+    let thinkingEl = currentAssistantEl.querySelector('.thinking-block');
+    if (!thinkingEl) {
+      thinkingEl = document.createElement('div');
+      thinkingEl.className = 'thinking-block';
+
+      const header = document.createElement('div');
+      header.className = 'thinking-header';
+
+      const icon = document.createElement('span');
+      icon.className = 'thinking-icon';
+      icon.textContent = '\u1F4A1';
+
+      const title = document.createElement('span');
+      title.textContent = 'Thinking';
+
+      const toggle = document.createElement('span');
+      toggle.className = 'thinking-toggle';
+      toggle.textContent = '\u25B6';
+
+      header.appendChild(icon);
+      header.appendChild(document.createTextNode(' '));
+      header.appendChild(title);
+      header.appendChild(toggle);
+
+      const contentEl = document.createElement('div');
+      contentEl.className = 'thinking-content';
+      contentEl.textContent = content;
+
+      thinkingEl.appendChild(header);
+      thinkingEl.appendChild(contentEl);
+
+      currentAssistantEl.insertBefore(thinkingEl, currentAssistantEl.firstChild);
+
+      header.addEventListener('click', () => {
+        thinkingEl.classList.toggle('expanded');
+        toggle.textContent = thinkingEl.classList.contains('expanded') ? '\u25BC' : '\u25B6';
+      });
+    } else {
+      const contentEl = thinkingEl.querySelector('.thinking-content');
       if (contentEl) {
         contentEl.textContent = content;
       }

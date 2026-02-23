@@ -62,11 +62,17 @@ export class OpenAICompatibleProvider implements LLMProvider {
     });
 
     let fullContent = '';
+    let reasoningContent = '';
     const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
       if (!delta) {continue;}
+
+      // Capture reasoning_content from o-series models
+      if (delta.reasoning_content) {
+        reasoningContent += delta.reasoning_content;
+      }
 
       if (delta.content) {
         fullContent += delta.content;
@@ -112,6 +118,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       content: fullContent,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       finishReason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
+      thinking: reasoningContent || undefined,
     };
   }
 

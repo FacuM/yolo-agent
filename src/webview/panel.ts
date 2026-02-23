@@ -147,6 +147,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       );
 
+      // Send thinking content if present (for Claude extended thinking and OpenAI o-series)
+      if (response.thinking) {
+        this.postMessage({ type: 'thinking', content: response.thinking });
+      }
+
       if (response.toolCalls && response.toolCalls.length > 0) {
         for (const toolCall of response.toolCalls) {
           this.postMessage({
