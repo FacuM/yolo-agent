@@ -40,7 +40,8 @@
   const sendBtn = /** @type {HTMLButtonElement} */ (document.getElementById('send-btn'));
   const stopBtn = /** @type {HTMLButtonElement} */ (document.getElementById('stop-btn'));
   const apiSpinner = document.getElementById('api-spinner');
-  const modeSelect = /** @type {HTMLSelectElement} */ (document.getElementById('mode-select'));
+  const modePickerBtn = /** @type {HTMLButtonElement} */ (document.getElementById('mode-picker-btn'));
+  const modeDropdown = /** @type {HTMLDivElement} */ (document.getElementById('mode-dropdown'));
   const providerSelect = /** @type {HTMLSelectElement} */ (document.getElementById('provider-select'));
   // Model picker autocomplete elements
   const modelInput = /** @type {HTMLInputElement} */ (document.getElementById('model-input'));
@@ -317,8 +318,15 @@
     }
   });
 
-  modeSelect.addEventListener('change', () => {
-    vscode.postMessage({ type: 'setMode', modeId: modeSelect.value });
+  modePickerBtn.addEventListener('click', () => {
+    modeDropdown.classList.toggle('hidden');
+  });
+
+  // Close mode dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!modePickerBtn.contains(/** @type {Node} */ (e.target)) && !modeDropdown.contains(/** @type {Node} */ (e.target))) {
+      modeDropdown.classList.add('hidden');
+    }
   });
 
   newChatBtn.addEventListener('click', () => {
@@ -593,6 +601,9 @@
         break;
       case 'toolCallStarted':
         handleToolCallStarted(message.name, message.id, message.args);
+        break;
+      case 'terminalOutput':
+        handleTerminalOutput(message.toolCallId, message.chunk);
         break;
       case 'toolCallResult':
         handleToolCallResult(message.id, message.name, message.content, message.isError);
@@ -1730,6 +1741,40 @@
     scrollToBottom();
   }
 
+  /**
+   * Handle streaming terminal output — update the tool card's output section
+   * in real-time as chunks arrive from the running command.
+   */
+  function handleTerminalOutput(toolCallId, chunk) {
+    const card = messagesEl.querySelector('.tool-call[data-tool-id="' + CSS.escape(toolCallId) + '"]');
+    if (!card) { return; }
+
+    const outputBody = card.querySelector('.tool-call-output .tool-call-section-body');
+    if (!outputBody) { return; }
+
+    // Replace the "Executing…" placeholder with actual output
+    if (outputBody.textContent === 'Executing\u2026') {
+      outputBody.textContent = '';
+    }
+    outputBody.textContent += chunk;
+
+    // Auto-expand the card content so user can see streaming output
+    const header = card.querySelector('.tool-call-header');
+    const contentEl = card.querySelector('.tool-call-content');
+    if (header && contentEl && !header.classList.contains('expanded')) {
+      header.classList.add('expanded');
+      contentEl.classList.add('visible');
+    }
+
+    // Keep only the last 200 lines visible to avoid DOM bloat
+    const lines = outputBody.textContent.split('\n');
+    if (lines.length > 200) {
+      outputBody.textContent = '... (earlier output truncated) ...\n' + lines.slice(-200).join('\n');
+    }
+
+    scrollToBottom();
+  }
+
   function handleToolCallResult(id, name, content, isError) {
     const card = messagesEl.querySelector('.tool-call[data-tool-id="' + CSS.escape(id) + '"]');
     if (card) {
@@ -1992,16 +2037,38 @@
   }
 
   function updateModeSelector() {
-    modeSelect.textContent = '';
-    for (const m of modes) {
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.name;
-      if (m.id === currentModeId) { opt.selected = true; }
-      modeSelect.appendChild(opt);
-    }
-    // Update mode display in controls section
+    // Update picker button text
     const currentMode = modes.find(m => m.id === currentModeId);
+    modePickerBtn.textContent = currentMode ? currentMode.name : 'Select mode';
+
+    // Rebuild dropdown items
+    modeDropdown.textContent = '';
+    for (const m of modes) {
+      const item = document.createElement('div');
+      item.className = 'mode-dropdown-item' + (m.id === currentModeId ? ' selected' : '');
+      item.dataset.modeId = m.id;
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'mode-dropdown-item-name';
+      nameEl.textContent = m.name;
+      item.appendChild(nameEl);
+
+      if (m.description) {
+        const descEl = document.createElement('div');
+        descEl.className = 'mode-dropdown-item-desc';
+        descEl.textContent = m.description;
+        item.appendChild(descEl);
+      }
+
+      item.addEventListener('click', () => {
+        vscode.postMessage({ type: 'setMode', modeId: m.id });
+        modeDropdown.classList.add('hidden');
+      });
+
+      modeDropdown.appendChild(item);
+    }
+
+    // Update mode display in controls section
     if (currentMode && currentModeDisplay) {
       currentModeDisplay.textContent = currentMode.name;
     }

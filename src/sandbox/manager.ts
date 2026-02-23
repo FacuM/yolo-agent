@@ -140,8 +140,13 @@ class OsLevelSandbox {
     this.active = true;
   }
 
+  /** Max total timeout for OS-level sandbox commands (5 minutes). */
+  private static MAX_TIMEOUT = 300_000;
+  /** Stall timeout — no output for this long triggers kill (60s). */
+  private static STALL_TIMEOUT = 60_000;
+
   /**
-   * Execute a command within the OS-level sandbox
+   * Execute a command within the OS-level sandbox with stall detection.
    */
   async executeCommand(command: string, cwd?: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     if (!this.active || !this.sandboxRoot) {
@@ -162,17 +167,51 @@ class OsLevelSandbox {
 
       let stdout = '';
       let stderr = '';
+      let lastOutputTime = Date.now();
+      let resolved = false;
 
-      proc.stdout?.on('data', (data) => { stdout += data; });
-      proc.stderr?.on('data', (data) => { stderr += data; });
+      const finish = (exitCode: number, timedOut?: boolean) => {
+        if (resolved) { return; }
+        resolved = true;
+        clearInterval(stallChecker);
+        clearTimeout(maxTimer);
+        if (timedOut) {
+          stderr += '\n⚠ Command timed out / stalled and was terminated.';
+        }
+        resolve({ stdout, stderr, exitCode });
+      };
 
-      proc.on('close', (code) => {
-        resolve({ stdout, stderr, exitCode: code || 0 });
+      proc.stdout?.on('data', (data) => {
+        stdout += data;
+        lastOutputTime = Date.now();
+      });
+      proc.stderr?.on('data', (data) => {
+        stderr += data;
+        lastOutputTime = Date.now();
       });
 
+      proc.on('close', (code) => { finish(code || 0); });
       proc.on('error', (err) => {
-        reject(err);
+        if (!resolved) { reject(err); }
       });
+
+      // Stall detection
+      const stallChecker = setInterval(() => {
+        if (Date.now() - lastOutputTime > OsLevelSandbox.STALL_TIMEOUT) {
+          proc.kill('SIGTERM');
+          setTimeout(() => { if (!resolved) { proc.kill('SIGKILL'); } }, 5000);
+          finish(1, true);
+        }
+      }, 5000);
+
+      // Max runtime cap
+      const maxTimer = setTimeout(() => {
+        if (!resolved) {
+          proc.kill('SIGTERM');
+          setTimeout(() => { if (!resolved) { proc.kill('SIGKILL'); } }, 5000);
+          finish(1, true);
+        }
+      }, OsLevelSandbox.MAX_TIMEOUT);
     });
   }
 
@@ -528,8 +567,14 @@ export class SandboxManager {
     }
   }
 
+  /** Max total timeout for commands (5 minutes). */
+  private static CMD_MAX_TIMEOUT = 300_000;
+  /** Stall timeout for commands (60s). */
+  private static CMD_STALL_TIMEOUT = 60_000;
+
   /**
-   * Execute a command, potentially within OS-level sandbox
+   * Execute a command, potentially within OS-level sandbox.
+   * Uses spawn with real-time stall detection instead of exec.
    */
   async executeCommand(command: string, cwd?: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     // If OS-level sandbox is active, use it
@@ -537,17 +582,69 @@ export class SandboxManager {
       return this.osLevelSandbox.executeCommand(command, cwd);
     }
 
-    // Otherwise, fall back to software-level checks and normal execution
+    // Otherwise, fall back to software-level checks and spawn-based execution
     const check = this.isCommandAllowed(command);
     if (!check.allowed) {
       throw new Error(`Command blocked: ${check.reason}`);
     }
 
-    const { stdout, stderr } = await execAsync(command, {
-      cwd: cwd || this.workspaceFolder.uri.fsPath,
-    });
+    const effectiveCwd = cwd || this.workspaceFolder.uri.fsPath;
 
-    return { stdout, stderr, exitCode: 0 };
+    return new Promise((resolve, reject) => {
+      const proc = spawn('sh', ['-c', command], {
+        cwd: effectiveCwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', TERM: 'dumb' },
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let lastOutputTime = Date.now();
+      let resolved = false;
+
+      const finish = (exitCode: number, timedOut?: boolean) => {
+        if (resolved) { return; }
+        resolved = true;
+        clearInterval(stallChecker);
+        clearTimeout(maxTimer);
+        if (timedOut) {
+          stderr += '\n⚠ Command timed out / stalled and was terminated.';
+        }
+        resolve({ stdout, stderr, exitCode });
+      };
+
+      proc.stdout?.on('data', (data: Buffer) => {
+        stdout += data.toString();
+        lastOutputTime = Date.now();
+      });
+      proc.stderr?.on('data', (data: Buffer) => {
+        stderr += data.toString();
+        lastOutputTime = Date.now();
+      });
+
+      proc.on('close', (code) => { finish(code || 0); });
+      proc.on('error', (err) => {
+        if (!resolved) { reject(err); }
+      });
+
+      // Stall detection
+      const stallChecker = setInterval(() => {
+        if (Date.now() - lastOutputTime > SandboxManager.CMD_STALL_TIMEOUT) {
+          proc.kill('SIGTERM');
+          setTimeout(() => { if (!resolved) { proc.kill('SIGKILL'); } }, 5000);
+          finish(1, true);
+        }
+      }, 5000);
+
+      // Max runtime cap
+      const maxTimer = setTimeout(() => {
+        if (!resolved) {
+          proc.kill('SIGTERM');
+          setTimeout(() => { if (!resolved) { proc.kill('SIGKILL'); } }, 5000);
+          finish(1, true);
+        }
+      }, SandboxManager.CMD_MAX_TIMEOUT);
+    });
   }
 
   /**
@@ -629,35 +726,26 @@ export class SandboxManager {
     }
 
     const { worktreePath, branchName } = this.currentSandbox;
+    const execOpts = { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 };
 
     try {
       // Commit any uncommitted changes first so diff is accurate
-      try {
-        const { stdout: status } = await execAsync('git status --porcelain', { cwd: worktreePath });
-        if (status.trim()) {
-          await execAsync('git add -A && git commit -m "sandbox: auto-commit pending changes"', { cwd: worktreePath });
-        }
-      } catch {
-        // Ignore commit failures
-      }
+      await this.autoCommitWorktree(worktreePath, 'sandbox: auto-commit pending changes');
 
-      // Get the merge-base to diff against
-      const { stdout: mergeBase } = await execAsync(
-        `git merge-base HEAD ${branchName}`,
-        { cwd: this.currentSandbox.originalPath }
-      ).catch(() => ({ stdout: 'HEAD' }));
+      // Find the merge-base: the point where the sandbox branched off
+      const mergeBase = await this.getMergeBase(worktreePath, branchName);
 
-      // Get diff stat from the worktree
+      // Get diff stat from the merge-base to HEAD (shows ALL sandbox changes)
       const { stdout: diffStat } = await execAsync(
-        'git diff --stat HEAD~1 HEAD 2>/dev/null || git diff --stat --cached HEAD 2>/dev/null || echo "(no changes)"',
-        { cwd: worktreePath }
-      );
+        `git diff --stat ${mergeBase}..HEAD`,
+        execOpts
+      ).catch(() => ({ stdout: '(no changes)' }));
 
-      // Get list of changed files
+      // Get list of changed files from merge-base to HEAD
       const { stdout: diffFiles } = await execAsync(
-        'git diff --name-status HEAD~1 HEAD 2>/dev/null || git diff --name-status --cached HEAD 2>/dev/null || true',
-        { cwd: worktreePath }
-      );
+        `git diff --name-status ${mergeBase}..HEAD`,
+        execOpts
+      ).catch(() => ({ stdout: '' }));
 
       const files = diffFiles.trim().split('\n').filter(l => l.trim()).map(line => {
         const [status, ...pathParts] = line.split('\t');
@@ -674,6 +762,64 @@ export class SandboxManager {
   }
 
   /**
+   * Find the merge-base between the sandbox branch and its parent.
+   * Falls back to the first commit of the branch if merge-base fails.
+   */
+  private async getMergeBase(worktreePath: string, branchName: string): Promise<string> {
+    const originalPath = this.currentSandbox?.originalPath ?? worktreePath;
+    try {
+      // Try to get the merge-base from the original repo
+      const { stdout: base } = await execAsync(
+        `git merge-base HEAD "${branchName}"`,
+        { cwd: originalPath }
+      );
+      return base.trim();
+    } catch {
+      // Fallback: use the first parent of the first commit on the branch
+      try {
+        const { stdout: firstCommit } = await execAsync(
+          'git rev-list --max-parents=0 HEAD',
+          { cwd: worktreePath }
+        );
+        return firstCommit.trim();
+      } catch {
+        return 'HEAD~1';
+      }
+    }
+  }
+
+  /**
+   * Auto-commit all pending changes in a worktree.
+   * Returns true if a commit was made, false if there was nothing to commit.
+   * Throws if the commit fails unexpectedly.
+   */
+  private async autoCommitWorktree(worktreePath: string, message: string): Promise<boolean> {
+    const execOpts = { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 };
+
+    // Check if there are uncommitted changes
+    const { stdout: status } = await execAsync('git status --porcelain', execOpts);
+    if (!status.trim()) {
+      return false; // Nothing to commit
+    }
+
+    // Stage all changes
+    await execAsync('git add -A', execOpts);
+
+    // Commit
+    await execAsync(`git commit -m "${message}"`, execOpts);
+
+    // Verify: check that nothing is left uncommitted
+    const { stdout: remaining } = await execAsync('git status --porcelain', execOpts);
+    if (remaining.trim()) {
+      // Some files weren't committed (e.g., .gitignore exclusions) — that's OK
+      // but log it for debugging
+      console.warn(`[sandbox] After auto-commit, still uncommitted:\n${remaining.trim()}`);
+    }
+
+    return true;
+  }
+
+  /**
    * Apply sandbox changes: merge the sandbox branch into the original branch,
    * then clean up the worktree and branch.
    */
@@ -685,35 +831,77 @@ export class SandboxManager {
     const { worktreePath, branchName, originalPath } = this.currentSandbox;
 
     try {
-      // Commit any uncommitted changes in the worktree
+      // 1. Commit any uncommitted changes — this is critical!
+      //    If this fails, we must NOT remove the worktree or we lose files.
       try {
-        const { stdout: status } = await execAsync('git status --porcelain', { cwd: worktreePath });
-        if (status.trim()) {
-          await execAsync('git add -A && git commit -m "sandbox: final changes"', { cwd: worktreePath });
-        }
-      } catch {
-        // Ignore
+        await this.autoCommitWorktree(worktreePath, 'sandbox: final changes');
+      } catch (commitErr) {
+        return {
+          success: false,
+          message: `Failed to commit sandbox changes: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}. The worktree at "${worktreePath}" has been preserved — you can commit manually and retry.`,
+        };
       }
 
-      // Clean up OS-level sandbox
+      // 2. Verify ALL changes are committed before we destroy the worktree
+      const { stdout: uncommitted } = await execAsync(
+        'git status --porcelain',
+        { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 }
+      );
+      if (uncommitted.trim()) {
+        // There are still uncommitted changes (likely .gitignore'd files, which is OK)
+        // But log a warning
+        console.warn(`[sandbox] Uncommitted files before worktree removal:\n${uncommitted.trim()}`);
+      }
+
+      // 3. Count commits on the sandbox branch to verify there's something to merge
+      const mergeBase = await this.getMergeBase(worktreePath, branchName);
+      const { stdout: commitCount } = await execAsync(
+        `git rev-list --count ${mergeBase}..HEAD`,
+        { cwd: worktreePath }
+      ).catch(() => ({ stdout: '0' }));
+
+      if (commitCount.trim() === '0') {
+        // No commits on the sandbox branch — nothing to merge
+        // Still clean up the worktree
+        if (this.osLevelSandbox?.isActive()) {
+          await this.osLevelSandbox.cleanup();
+        }
+        await execAsync(`git worktree remove "${worktreePath}" --force`, { cwd: originalPath });
+        try { await execAsync(`git branch -D "${branchName}"`, { cwd: originalPath }); } catch { /* ignore */ }
+
+        this.currentSandbox = null;
+        this._onDidChangeSandbox.fire(this.getSandboxInfo());
+
+        return {
+          success: true,
+          message: 'Sandbox had no changes to apply. Worktree cleaned up.',
+        };
+      }
+
+      // 4. Clean up OS-level sandbox
       if (this.osLevelSandbox?.isActive()) {
         await this.osLevelSandbox.cleanup();
       }
 
-      // Remove the worktree (must happen before merge to release the branch lock)
+      // 5. Remove the worktree (must happen before merge to release the branch lock)
       await execAsync(`git worktree remove "${worktreePath}" --force`, { cwd: originalPath });
 
-      // Get the current branch in the original workspace
+      // 6. Get the current branch in the original workspace
       const { stdout: currentBranch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: originalPath });
 
-      // Merge the sandbox branch into the current branch
+      // 7. Merge the sandbox branch into the current branch
       await execAsync(`git merge "${branchName}" --no-edit`, { cwd: originalPath });
 
-      // Delete the sandbox branch now that it's merged
+      // 8. Verify the merge brought files in by checking the working tree
+      const { stdout: mergedFiles } = await execAsync(
+        `git diff --name-only ${mergeBase}..HEAD`,
+        { cwd: originalPath, maxBuffer: 10 * 1024 * 1024 }
+      ).catch(() => ({ stdout: '' }));
+
+      // 9. Delete the sandbox branch now that it's merged
       try {
         await execAsync(`git branch -d "${branchName}"`, { cwd: originalPath });
       } catch {
-        // Branch delete might fail if not fully merged; try force-delete
         try {
           await execAsync(`git branch -D "${branchName}"`, { cwd: originalPath });
         } catch { /* ignore */ }
@@ -722,19 +910,34 @@ export class SandboxManager {
       this.currentSandbox = null;
       this._onDidChangeSandbox.fire(this.getSandboxInfo());
 
+      const fileCount = mergedFiles.trim().split('\n').filter(l => l.trim()).length;
       return {
         success: true,
-        message: `Sandbox branch "${branchName}" merged into "${currentBranch.trim()}" and cleaned up.`,
+        message: `Sandbox branch "${branchName}" merged into "${currentBranch.trim()}" (${fileCount} file(s) applied).`,
       };
     } catch (err) {
-      // If merge failed, try to recover
-      this.currentSandbox = null;
-      this._onDidChangeSandbox.fire(this.getSandboxInfo());
+      // If merge failed, try to recover — do NOT clear currentSandbox
+      // so the user can retry or discard
+      const errMsg = err instanceof Error ? err.message : String(err);
 
-      return {
-        success: false,
-        message: `Merge failed: ${err instanceof Error ? err.message : String(err)}. The branch "${branchName}" has been kept for manual resolution.`,
-      };
+      // Check if the worktree still exists
+      try {
+        await execAsync(`test -d "${worktreePath}"`);
+        // Worktree still exists — user can retry
+        return {
+          success: false,
+          message: `Apply failed: ${errMsg}. The sandbox worktree at "${worktreePath}" is still intact — you can retry or discard.`,
+        };
+      } catch {
+        // Worktree was removed but merge failed — branch should still exist
+        this.currentSandbox = null;
+        this._onDidChangeSandbox.fire(this.getSandboxInfo());
+
+        return {
+          success: false,
+          message: `Merge failed: ${errMsg}. The branch "${branchName}" has been kept for manual resolution. Run: git merge "${branchName}" --no-edit`,
+        };
+      }
     }
   }
 

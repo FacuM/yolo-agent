@@ -11,6 +11,7 @@ import { McpServerConfig } from '../mcp/types';
 import { SessionManager, BufferedMessage, TodoItem, TodoItemStatus, SmartTodoPlan } from '../sessions/manager';
 import { ChatMessage, ToolResult as ProviderToolResult } from '../providers/types';
 import { AskQuestionTool } from '../tools/question';
+import { RunTerminalTool } from '../tools/terminal';
 import { SandboxManager } from '../sandbox/manager';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -573,6 +574,17 @@ Rules:
               }
 
               try {
+                // Wire up real-time terminal streaming for runTerminal tool
+                if (toolCall.name === 'runTerminal' && tool instanceof RunTerminalTool) {
+                  (tool as RunTerminalTool).onOutput = (chunk: string) => {
+                    this.postSessionMessage(sessionId, {
+                      type: 'terminalOutput',
+                      toolCallId: toolCall.id,
+                      chunk,
+                    });
+                  };
+                }
+
                 const result = await tool.execute(toolCall.arguments);
                 this.postSessionMessage(sessionId, {
                   type: 'toolCallResult',
@@ -1873,7 +1885,10 @@ Rules:
       <!-- Input area at top -->
       <div id="input-section">
         <div class="input-header">
-          <select id="mode-select" title="Select mode"></select>
+          <div id="mode-picker" class="mode-picker">
+            <button id="mode-picker-btn" class="mode-picker-btn" title="Select mode"></button>
+            <div id="mode-dropdown" class="mode-dropdown hidden"></div>
+          </div>
           <select id="provider-select" title="Select provider">
             <option value="">No providers</option>
           </select>
