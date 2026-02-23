@@ -8,10 +8,71 @@ import { ContextManager } from '../context/manager';
 import { McpConfigManager } from '../mcp/config';
 import { McpClient } from '../mcp/client';
 import { McpServerConfig } from '../mcp/types';
-import { SessionManager, BufferedMessage } from '../sessions/manager';
+import { SessionManager, BufferedMessage, TodoItem, TodoItemStatus } from '../sessions/manager';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'yoloAgent.chatView';
+
+  // ===== Smart To-Do prompt templates =====
+  private static readonly SMART_TODO_PLANNING_PROMPT = `You are a meticulous software engineering planner. The user will provide a request. Your job is to:
+
+1. Analyze the request carefully.
+2. Break it into specific, testable to-do items.
+3. Output a structured plan using **exactly** this format (one item per line):
+
+\`\`\`plan
+TODO 1: <Short title> — <Brief description of what must be done>
+TODO 2: <Short title> — <Brief description of what must be done>
+TODO 3: <Short title> — <Brief description of what must be done>
+...
+\`\`\`
+
+Rules:
+- Each TODO must be independently verifiable (e.g., "file X exists", "function Y works", "test Z passes").
+- Keep titles concise (under 10 words).
+- Include an E2E / integration verification step as the last TODO.
+- Do NOT start implementing yet — only plan.`;
+
+  private static readonly SMART_TODO_EXECUTION_PROMPT = `You are an expert AI coding assistant operating in Smart To-Do mode. You have a plan to follow.
+
+**Your plan:**
+{PLAN}
+
+**Instructions:**
+- Work through the TODO items in order.
+- Use the available tools to read, write, and run commands as needed.
+- After completing each item, mention which TODO you just finished.
+- Do NOT skip items. If one depends on another, complete the dependency first.
+- When you finish all items, say "ALL TODOS COMPLETE".`;
+
+  private static readonly SMART_TODO_VERIFY_PROMPT = `You are a QA verification assistant. You were given a plan and the AI attempted to complete it. Now verify the work.
+
+**Original user request:**
+{USER_REQUEST}
+
+**Plan:**
+{PLAN}
+
+**Instructions:**
+1. For EACH TODO item, verify whether it was actually completed by reading files, running tests, and checking diagnostics.
+2. Include E2E / integration testing where applicable.
+3. Respond with **exactly** this format for each item:
+
+\`\`\`verification
+TODO 1: DONE | <reason>
+TODO 2: FAILED | <what's wrong or missing>
+TODO 3: DONE | <reason>
+...
+\`\`\`
+
+Rules:
+- Use DONE if the item is fully and correctly implemented.
+- Use FAILED if the item is missing, broken, or incomplete — explain why.
+- Use IN-PROGRESS if partially done.
+- After the verification block, summarize: which items pass, which need work.
+- If all items are DONE, end with "ALL TODOS VERIFIED".`;
+
+  // ===== Instance fields =====
 
   private view?: vscode.WebviewView;
   private registry: ProviderRegistry;
@@ -256,13 +317,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Auto-title from first user message
     this.sessionManager.updateTitleFromMessage(sessionId, text);
 
+    // --- Smart To-Do orchestration ---
+    if (this.modeManager.isSmartTodoMode()) {
+      await this.runSmartTodoFlow(sessionId, text, fileReferences);
+      return;
+    }
+
+    // --- Normal flow ---
+    await this.sendOneLLMRound(sessionId, text, fileReferences);
+  }
+
+  /**
+   * Perform a single LLM round-trip: build messages, call provider, handle
+   * tool calls, update session history. Shared by normal and smart-todo flows.
+   */
+  private async sendOneLLMRound(
+    sessionId: string,
+    userText: string,
+    fileReferences?: string[],
+    systemPromptOverride?: string,
+  ): Promise<string> {
+    const provider = this.registry.getActiveProvider()!;
+
     // Get allowed tools based on current mode
     const allToolNames = Array.from(this.tools.keys());
     const allowedToolNames = this.modeManager.getAllowedTools(allToolNames);
     const allowedTools = allowedToolNames.map(name => this.tools.get(name)!.definition);
 
-    // Add mode system prompt
-    let modePrompt = this.modeManager.getSystemPrompt();
+    // Build system prompt
+    let modePrompt = systemPromptOverride ?? this.modeManager.getSystemPrompt();
 
     // Add context from skills and AGENTS.md
     const contextAddition = this.contextManager.getSystemPromptAddition();
@@ -294,20 +377,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     const history = this.sessionManager.getHistory(sessionId);
-    const userMessage = { role: 'user' as const, content: text };
     const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
       { role: 'system', content: modePrompt },
       ...history,
-      userMessage,
+      { role: 'user', content: userText },
     ];
 
-    this.sessionManager.addMessage(sessionId, { role: 'user', content: text });
+    this.sessionManager.addMessage(sessionId, { role: 'user', content: userText });
     this.sessionManager.setSessionStatus(sessionId, 'busy');
 
-    // Create abort controller for this session
     const abortCtrl = new AbortController();
     this.abortControllers.set(sessionId, abortCtrl);
 
+    let responseText = '';
     try {
       const model = this.registry.getActiveModelId();
 
@@ -319,7 +401,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       );
 
-      // Send thinking content if present (for Claude extended thinking and OpenAI o-series)
       if (response.thinking) {
         this.postSessionMessage(sessionId, { type: 'thinking', content: response.thinking });
       }
@@ -348,10 +429,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       this.postSessionMessage(sessionId, { type: 'messageComplete' });
 
-      if (response.content) {
+      responseText = response.content ?? '';
+      if (responseText) {
         this.sessionManager.addMessage(sessionId, {
           role: 'assistant',
-          content: response.content,
+          content: responseText,
         });
       }
       this.sessionManager.setSessionStatus(sessionId, 'idle');
@@ -361,8 +443,226 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         message: err instanceof Error ? err.message : String(err),
       });
       this.sessionManager.setSessionStatus(sessionId, 'error');
+      throw err;
     } finally {
       this.abortControllers.delete(sessionId);
+    }
+
+    return responseText;
+  }
+
+  // ===== Smart To-Do orchestration =====
+
+  /**
+   * Full Smart To-Do lifecycle:
+   *  1. Planning  — ask the AI to produce a structured plan
+   *  2. Execution — ask the AI to implement the plan
+   *  3. Verification — ask the AI to verify every TODO; loop back to 2 if needed
+   */
+  private async runSmartTodoFlow(
+    sessionId: string,
+    userText: string,
+    fileReferences?: string[],
+  ): Promise<void> {
+    // Initialize smart-todo state
+    this.sessionManager.initSmartTodo(sessionId, userText);
+
+    // Notify the webview that we're in smart-todo mode
+    this.postSessionMessage(sessionId, {
+      type: 'smartTodoUpdate',
+      phase: 'planning',
+      todos: [],
+      iteration: 0,
+    });
+
+    // ── Phase 1: Planning ───────────────────────────────────────────────
+    try {
+      const planningPrompt = ChatViewProvider.SMART_TODO_PLANNING_PROMPT;
+      const planResponse = await this.sendOneLLMRound(
+        sessionId,
+        userText,
+        fileReferences,
+        planningPrompt,
+      );
+
+      // Parse TODOs from the plan response
+      const todos = this.parseTodosFromPlan(planResponse);
+      this.sessionManager.setSmartTodoItems(sessionId, todos);
+      this.sessionManager.setSmartTodoPhase(sessionId, 'executing');
+
+      this.postSessionMessage(sessionId, {
+        type: 'smartTodoUpdate',
+        phase: 'executing',
+        todos,
+        iteration: 0,
+      });
+
+      if (todos.length === 0) {
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: '\n\n⚠️ Could not parse a structured plan. Proceeding with a single execution pass.\n',
+        });
+      }
+
+      // Build the plan text for subsequent prompts
+      const planText = this.formatPlanText(todos);
+
+      // ── Phase 2–3: Execute → Verify loop ─────────────────────────────
+      let iteration = 0;
+      const maxIter = this.sessionManager.getSmartTodo(sessionId)?.maxIterations ?? 5;
+
+      while (iteration < maxIter) {
+        // Check if aborted
+        if (!this.sessionManager.getSession(sessionId)) { break; }
+
+        // ── Execution pass ──────────────────────────────────────────────
+        const execPrompt = ChatViewProvider.SMART_TODO_EXECUTION_PROMPT
+          .replace('{PLAN}', planText);
+
+        const pendingItems = todos.filter(t => t.status !== 'done').map(t => `- TODO ${t.id}: ${t.title}`).join('\n');
+        const execUserMsg = iteration === 0
+          ? `Please implement the plan now. Here is the original request:\n\n${userText}`
+          : `Some TODOs are still incomplete. Please fix the following items:\n\n${pendingItems}\n\nOriginal request: ${userText}`;
+
+        await this.sendOneLLMRound(sessionId, execUserMsg, undefined, execPrompt);
+
+        // ── Verification pass ───────────────────────────────────────────
+        this.sessionManager.setSmartTodoPhase(sessionId, 'verifying');
+        iteration = this.sessionManager.incrementVerifyIteration(sessionId);
+
+        this.postSessionMessage(sessionId, {
+          type: 'smartTodoUpdate',
+          phase: 'verifying',
+          todos: this.sessionManager.getSmartTodo(sessionId)?.todos ?? [],
+          iteration,
+        });
+
+        const verifyPrompt = ChatViewProvider.SMART_TODO_VERIFY_PROMPT
+          .replace('{USER_REQUEST}', userText)
+          .replace('{PLAN}', planText);
+
+        const verifyResponse = await this.sendOneLLMRound(
+          sessionId,
+          `Verify the current state of all TODOs. This is verification iteration ${iteration}.`,
+          undefined,
+          verifyPrompt,
+        );
+
+        // Parse verification results and update todo statuses
+        this.parseVerificationResponse(sessionId, verifyResponse, todos);
+
+        this.postSessionMessage(sessionId, {
+          type: 'smartTodoUpdate',
+          phase: this.sessionManager.allTodosDone(sessionId) ? 'executing' : 'verifying',
+          todos: this.sessionManager.getSmartTodo(sessionId)?.todos ?? [],
+          iteration,
+        });
+
+        // Check completion
+        if (this.sessionManager.allTodosDone(sessionId)) {
+          this.postSessionMessage(sessionId, {
+            type: 'streamChunk',
+            content: `\n\n✅ **All TODOs verified complete after ${iteration} iteration(s).**\n`,
+          });
+          this.postSessionMessage(sessionId, { type: 'messageComplete' });
+          break;
+        }
+
+        // If max iterations reached, report and stop
+        if (this.sessionManager.hasReachedMaxIterations(sessionId)) {
+          const remaining = todos.filter(t => t.status !== 'done');
+          const summary = remaining.map(t => `- TODO ${t.id}: ${t.title} (${t.status})`).join('\n');
+          this.postSessionMessage(sessionId, {
+            type: 'streamChunk',
+            content: `\n\n⚠️ **Reached max iterations (${maxIter}).** Remaining items:\n${summary}\n`,
+          });
+          this.postSessionMessage(sessionId, { type: 'messageComplete' });
+          break;
+        }
+
+        // Loop back to execution
+        this.sessionManager.setSmartTodoPhase(sessionId, 'executing');
+      }
+    } catch (err) {
+      // Errors in individual rounds are already reported; this catches unexpected breaks
+      if (!(err instanceof Error && err.message.includes('abort'))) {
+        this.postSessionMessage(sessionId, {
+          type: 'error',
+          message: `Smart To-Do loop error: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }
+  }
+
+  /**
+   * Parse a ```plan block into TodoItems.
+   */
+  private parseTodosFromPlan(response: string): TodoItem[] {
+    const todos: TodoItem[] = [];
+
+    // Try to extract from a ```plan ... ``` block first
+    const planBlockMatch = response.match(/```plan\s*\n([\s\S]*?)```/);
+    const text = planBlockMatch ? planBlockMatch[1] : response;
+
+    // Match lines like "TODO 1: Title — Description" or "TODO 1: Title - Description"
+    const todoRegex = /TODO\s*(\d+)\s*:\s*(.+)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = todoRegex.exec(text)) !== null) {
+      const id = parseInt(match[1], 10);
+      const fullText = match[2].trim();
+      const dashIndex = fullText.search(/\s[—\-–]\s/);
+      const title = dashIndex >= 0 ? fullText.slice(0, dashIndex).trim() : fullText;
+      const detail = dashIndex >= 0 ? fullText.slice(dashIndex).replace(/^[\s—\-–]+/, '').trim() : undefined;
+
+      todos.push({ id, title, status: 'pending', detail });
+    }
+
+    return todos;
+  }
+
+  /**
+   * Format todos into a readable plan text for prompt injection.
+   */
+  private formatPlanText(todos: TodoItem[]): string {
+    if (todos.length === 0) { return '(No structured plan available)'; }
+    return todos.map(t =>
+      `TODO ${t.id}: ${t.title}${t.detail ? ' — ' + t.detail : ''} [${t.status.toUpperCase()}]`
+    ).join('\n');
+  }
+
+  /**
+   * Parse a ```verification block and update todo statuses.
+   */
+  private parseVerificationResponse(sessionId: string, response: string, todos: TodoItem[]): void {
+    // Try ```verification block first, fall back to full response
+    const verifyBlockMatch = response.match(/```verification\s*\n([\s\S]*?)```/);
+    const text = verifyBlockMatch ? verifyBlockMatch[1] : response;
+
+    const lineRegex = /TODO\s*(\d+)\s*:\s*(DONE|FAILED|IN-PROGRESS|IN_PROGRESS)\s*\|?\s*(.*)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = lineRegex.exec(text)) !== null) {
+      const id = parseInt(match[1], 10);
+      const rawStatus = match[2].toUpperCase().replace('-', '_');
+      let status: TodoItemStatus;
+      if (rawStatus === 'DONE') { status = 'done'; }
+      else if (rawStatus === 'FAILED') { status = 'failed'; }
+      else { status = 'in-progress'; }
+
+      this.sessionManager.updateSmartTodoItem(sessionId, id, status);
+
+      // Also update the local array so loop checks are accurate
+      const todo = todos.find(t => t.id === id);
+      if (todo) { todo.status = status; }
+    }
+
+    // If response contains "ALL TODOS VERIFIED", mark everything done
+    if (/ALL\s+TODOS?\s+VERIFIED/i.test(response)) {
+      for (const todo of todos) {
+        if (todo.status !== 'done') {
+          todo.status = 'done';
+          this.sessionManager.updateSmartTodoItem(sessionId, todo.id, 'done');
+        }
+      }
     }
   }
 

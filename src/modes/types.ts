@@ -1,4 +1,4 @@
-export type ModeId = 'sandbox' | 'agent' | 'ask' | 'plan' | 'custom';
+export type ModeId = 'sandbox' | 'agent' | 'ask' | 'plan' | 'smart-todo' | 'custom';
 
 export type ToolPermission = 'allow' | 'deny' | 'read-only';
 
@@ -11,7 +11,7 @@ export interface BaseMode {
 }
 
 export interface BuiltinMode extends BaseMode {
-  id: 'sandbox' | 'agent' | 'ask' | 'plan';
+  id: 'sandbox' | 'agent' | 'ask' | 'plan' | 'smart-todo';
   isBuiltIn: true;
   toolPermissions: Record<string, ToolPermission>;
 }

@@ -1,6 +1,6 @@
 import { Mode, ModeId, BuiltinMode } from './types';
 
-export const BUILT_IN_MODES: Record<'sandbox' | 'agent' | 'ask' | 'plan', BuiltinMode> = {
+export const BUILT_IN_MODES: Record<'sandbox' | 'agent' | 'ask' | 'plan' | 'smart-todo', BuiltinMode> = {
   sandbox: {
     id: 'sandbox' as const,
     name: 'Sandbox Orchestrator',
@@ -86,6 +86,21 @@ export const BUILT_IN_MODES: Record<'sandbox' | 'agent' | 'ask' | 'plan', Builti
       writeFile: 'deny',
       listFiles: 'allow',
       runTerminal: 'deny',
+      getDiagnostics: 'allow',
+    },
+    isBuiltIn: true,
+  },
+
+  'smart-todo': {
+    id: 'smart-todo' as const,
+    name: 'Smart To-Do',
+    description: 'Iterative plan → execute → verify loop until all TODOs are complete',
+    systemPrompt: '', // Dynamic — overridden by the Smart To-Do orchestrator in panel.ts
+    toolPermissions: {
+      readFile: 'allow',
+      writeFile: 'allow',
+      listFiles: 'allow',
+      runTerminal: 'allow',
       getDiagnostics: 'allow',
     },
     isBuiltIn: true,

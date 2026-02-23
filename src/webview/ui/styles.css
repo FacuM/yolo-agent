@@ -1212,3 +1212,94 @@ body {
   opacity: 0.6;
   font-size: 12px;
 }
+
+/* ===== Smart To-Do Tracker ===== */
+
+#smart-todo-tracker {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-sideBar-background);
+  font-size: 12px;
+}
+
+#smart-todo-tracker.hidden {
+  display: none;
+}
+
+.smart-todo-phase {
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--vscode-foreground);
+}
+
+.smart-todo-progress {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--vscode-progressBar-background, rgba(255,255,255,0.1));
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.smart-todo-progress-bar {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--vscode-progressBar-background, #0078d4);
+  transition: width 0.3s ease;
+}
+
+.smart-todo-progress-label {
+  position: absolute;
+  right: 0;
+  top: -16px;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.smart-todo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.smart-todo-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--vscode-foreground);
+  opacity: 0.8;
+}
+
+.smart-todo-item.done {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+.smart-todo-item.done .smart-todo-icon {
+  color: #22c55e;
+}
+
+.smart-todo-item.failed .smart-todo-icon {
+  color: #ef4444;
+}
+
+.smart-todo-item.in-progress .smart-todo-icon {
+  color: #3b82f6;
+}
+
+.smart-todo-icon {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  font-weight: bold;
+}
+
+.smart-todo-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -42,6 +42,10 @@ export class ModeManager {
     return BUILT_IN_MODES[this.currentModeId as keyof typeof BUILT_IN_MODES] || BUILT_IN_MODES.sandbox;
   }
 
+  isSmartTodoMode(): boolean {
+    return this.currentModeId === 'smart-todo';
+  }
+
   async setCurrentMode(modeId: ModeId) {
     if (modeId !== this.currentModeId) {
       this.currentModeId = modeId;

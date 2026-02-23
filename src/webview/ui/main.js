@@ -506,6 +506,11 @@
         }
         break;
 
+      // Smart To-Do messages
+      case 'smartTodoUpdate':
+        renderSmartTodoTracker(message.phase, message.todos || [], message.iteration || 0);
+        break;
+
       // Settings messages
       case 'profiles':
         profiles = message.profiles;
@@ -713,6 +718,71 @@
   }
 
   // ===== Sessions Functions =====
+
+  function renderSmartTodoTracker(phase, todos, iteration) {
+    // Find or create the tracker element
+    let tracker = document.getElementById('smart-todo-tracker');
+    if (!tracker) {
+      tracker = document.createElement('div');
+      tracker.id = 'smart-todo-tracker';
+      // Insert before messages
+      messagesEl.parentNode.insertBefore(tracker, messagesEl);
+    }
+
+    tracker.textContent = '';
+    tracker.classList.remove('hidden');
+
+    // Phase indicator
+    const phaseEl = document.createElement('div');
+    phaseEl.className = 'smart-todo-phase';
+    const phaseIcons = { planning: '\uD83D\uDCCB', executing: '\u2699\uFE0F', verifying: '\u2705' };
+    const phaseLabels = { planning: 'Planning', executing: 'Executing', verifying: 'Verifying' };
+    phaseEl.textContent = (phaseIcons[phase] || '') + ' ' + (phaseLabels[phase] || phase);
+    if (iteration > 0) {
+      phaseEl.textContent += ' (iteration ' + iteration + ')';
+    }
+    tracker.appendChild(phaseEl);
+
+    if (todos.length === 0) { return; }
+
+    // Progress bar
+    const doneCount = todos.filter(function(t) { return t.status === 'done'; }).length;
+    const progressWrap = document.createElement('div');
+    progressWrap.className = 'smart-todo-progress';
+    const progressBar = document.createElement('div');
+    progressBar.className = 'smart-todo-progress-bar';
+    progressBar.style.width = Math.round((doneCount / todos.length) * 100) + '%';
+    progressWrap.appendChild(progressBar);
+    const progressLabel = document.createElement('span');
+    progressLabel.className = 'smart-todo-progress-label';
+    progressLabel.textContent = doneCount + '/' + todos.length + ' complete';
+    progressWrap.appendChild(progressLabel);
+    tracker.appendChild(progressWrap);
+
+    // Todo list
+    const list = document.createElement('div');
+    list.className = 'smart-todo-list';
+    for (const todo of todos) {
+      const item = document.createElement('div');
+      item.className = 'smart-todo-item ' + todo.status;
+
+      const statusIcon = document.createElement('span');
+      statusIcon.className = 'smart-todo-icon';
+      if (todo.status === 'done') { statusIcon.textContent = '\u2713'; }
+      else if (todo.status === 'failed') { statusIcon.textContent = '\u2717'; }
+      else if (todo.status === 'in-progress') { statusIcon.textContent = '\u25CB'; }
+      else { statusIcon.textContent = '\u25CB'; }
+
+      const titleEl = document.createElement('span');
+      titleEl.className = 'smart-todo-title';
+      titleEl.textContent = 'TODO ' + todo.id + ': ' + todo.title;
+
+      item.appendChild(statusIcon);
+      item.appendChild(titleEl);
+      list.appendChild(item);
+    }
+    tracker.appendChild(list);
+  }
 
   function renderSessionList(sessions, activeSessionId) {
     sessionsList.textContent = '';

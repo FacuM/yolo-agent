@@ -16,6 +16,30 @@ export interface BufferedMessage {
   [key: string]: unknown;
 }
 
+// ===== Smart To-Do types =====
+
+export type TodoItemStatus = 'pending' | 'in-progress' | 'done' | 'failed';
+
+export interface TodoItem {
+  id: number;
+  title: string;
+  status: TodoItemStatus;
+  detail?: string;
+}
+
+export interface SmartTodoPlan {
+  /** The original user request */
+  userRequest: string;
+  /** Structured list of to-do items */
+  todos: TodoItem[];
+  /** Current phase: planning → executing → verifying (loops back to executing) */
+  phase: 'planning' | 'executing' | 'verifying';
+  /** Number of verify iterations completed */
+  verifyIterations: number;
+  /** Max verify iterations before force-stopping */
+  maxIterations: number;
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -29,6 +53,8 @@ export interface Session {
   providerId: string | null;
   /** Model ID override for this session */
   modelId: string | null;
+  /** Smart To-Do plan state (null if not in smart-todo mode) */
+  smartTodo: SmartTodoPlan | null;
 }
 
 export interface SessionSummary {
@@ -73,6 +99,7 @@ export class SessionManager {
       buffer: [],
       providerId,
       modelId,
+      smartTodo: null,
     };
     this.sessions.set(session.id, session);
 
@@ -230,5 +257,67 @@ export class SessionManager {
    */
   isActiveSession(sessionId: string): boolean {
     return this.activeSessionId === sessionId;
+  }
+
+  // ===== Smart To-Do helpers =====
+
+  initSmartTodo(sessionId: string, userRequest: string, maxIterations = 5): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) { return; }
+    session.smartTodo = {
+      userRequest,
+      todos: [],
+      phase: 'planning',
+      verifyIterations: 0,
+      maxIterations,
+    };
+    this.fireChange();
+  }
+
+  getSmartTodo(sessionId: string): SmartTodoPlan | null {
+    return this.sessions.get(sessionId)?.smartTodo ?? null;
+  }
+
+  setSmartTodoPhase(sessionId: string, phase: SmartTodoPlan['phase']): void {
+    const plan = this.sessions.get(sessionId)?.smartTodo;
+    if (!plan) { return; }
+    plan.phase = phase;
+    this.fireChange();
+  }
+
+  setSmartTodoItems(sessionId: string, todos: TodoItem[]): void {
+    const plan = this.sessions.get(sessionId)?.smartTodo;
+    if (!plan) { return; }
+    plan.todos = todos;
+    this.fireChange();
+  }
+
+  updateSmartTodoItem(sessionId: string, todoId: number, status: TodoItemStatus): void {
+    const plan = this.sessions.get(sessionId)?.smartTodo;
+    if (!plan) { return; }
+    const item = plan.todos.find(t => t.id === todoId);
+    if (item) {
+      item.status = status;
+      this.fireChange();
+    }
+  }
+
+  incrementVerifyIteration(sessionId: string): number {
+    const plan = this.sessions.get(sessionId)?.smartTodo;
+    if (!plan) { return 0; }
+    plan.verifyIterations += 1;
+    return plan.verifyIterations;
+  }
+
+  allTodosDone(sessionId: string): boolean {
+    const plan = this.sessions.get(sessionId)?.smartTodo;
+    if (!plan || plan.todos.length === 0) { return false; }
+    return plan.todos.every(t => t.status === 'done');
+  }
+
+  hasReachedMaxIterations(sessionId: string): boolean {
+    const plan = this.sessions.get(sessionId)?.smartTodo;
+    if (!plan) { return true; }
+    return plan.verifyIterations >= plan.maxIterations;
   }
 }
