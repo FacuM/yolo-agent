@@ -143,6 +143,8 @@
   const mcpBackBtn = document.getElementById('mcp-back-btn');
   const mcpServersList = document.getElementById('mcp-servers-list');
   const addMcpServerBtn = document.getElementById('add-mcp-server-btn');
+  const editMcpGlobalSettingsBtn = document.getElementById('edit-mcp-global-settings-btn');
+  const editMcpWorkspaceSettingsBtn = document.getElementById('edit-mcp-workspace-settings-btn');
 
   // ===== MCP Editor Elements =====
   const mcpEditorBackBtn = document.getElementById('mcp-editor-back-btn');
@@ -718,6 +720,14 @@
 
   addMcpServerBtn.addEventListener('click', () => {
     openMcpEditor(null);
+  });
+
+  editMcpGlobalSettingsBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'openMcpGlobalSettings' });
+  });
+
+  editMcpWorkspaceSettingsBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'openMcpWorkspaceSettings' });
   });
 
   mcpEditorBackBtn.addEventListener('click', () => {
@@ -2752,8 +2762,9 @@
       card.className = 'mcp-server-card';
 
       const status = document.createElement('div');
-      status.className = 'mcp-status ' + (server.connected ? 'connected' : 'disconnected');
-      status.title = server.connected ? 'Connected' : 'Disconnected';
+      const activeStatus = getMcpStatusVariant(server.status);
+      status.className = 'mcp-status ' + activeStatus;
+      status.title = server.statusError ? (formatMcpStatusLabel(server.status) + ': ' + server.statusError) : formatMcpStatusLabel(server.status);
 
       const info = document.createElement('div');
       info.className = 'mcp-info';
@@ -2766,8 +2777,34 @@
       transport.className = 'mcp-badge';
       transport.textContent = server.transport.toUpperCase();
 
+      const sourceBadge = document.createElement('span');
+      sourceBadge.className = 'mcp-badge ' + (server.source === 'workspace' ? 'workspace' : 'global');
+      sourceBadge.textContent = server.source === 'workspace' ? 'WORKSPACE' : 'GLOBAL';
+
+      const runtimeBadge = document.createElement('span');
+      runtimeBadge.className = 'mcp-badge mcp-runtime ' + getMcpStatusVariant(server.status);
+      runtimeBadge.textContent = formatMcpStatusLabel(server.status);
+
+      const badges = document.createElement('div');
+      badges.className = 'mcp-badges-row';
+      badges.appendChild(transport);
+      badges.appendChild(sourceBadge);
+
+      if (server.overridesGlobal) {
+        const overrideBadge = document.createElement('span');
+        overrideBadge.className = 'mcp-badge override';
+        overrideBadge.textContent = 'OVERRIDES GLOBAL';
+        badges.appendChild(overrideBadge);
+      }
+
+      badges.appendChild(runtimeBadge);
+
+      if (server.statusError) {
+        runtimeBadge.title = server.statusError;
+      }
+
       info.appendChild(name);
-      info.appendChild(transport);
+      info.appendChild(badges);
 
       const actions = document.createElement('div');
       actions.className = 'mcp-actions';
@@ -2775,8 +2812,13 @@
       const editBtn = document.createElement('button');
       editBtn.textContent = '\u270E';
       editBtn.title = 'Edit';
+      if (server.source === 'workspace') {
+        editBtn.disabled = true;
+        editBtn.title = 'Edit this server in workspace MCP settings JSON';
+      }
       editBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (server.source === 'workspace') { return; }
         openMcpEditor(server);
       });
 
@@ -2787,6 +2829,7 @@
       card.appendChild(actions);
 
       card.addEventListener('click', () => {
+        if (server.source === 'workspace') { return; }
         openMcpEditor(server);
       });
 
@@ -2810,8 +2853,9 @@
       card.className = 'mcp-server-card';
 
       const status = document.createElement('div');
-      status.className = 'mcp-status ' + (server.connected ? 'connected' : 'disconnected');
-      status.title = server.connected ? 'Connected' : 'Disconnected';
+      const activeStatus = getMcpStatusVariant(server.status);
+      status.className = 'mcp-status ' + activeStatus;
+      status.title = server.statusError ? (formatMcpStatusLabel(server.status) + ': ' + server.statusError) : formatMcpStatusLabel(server.status);
 
       const info = document.createElement('div');
       info.className = 'mcp-info';
@@ -2824,8 +2868,32 @@
       transport.className = 'mcp-badge';
       transport.textContent = server.transport.toUpperCase();
 
+      const sourceBadge = document.createElement('span');
+      sourceBadge.className = 'mcp-badge ' + (server.source === 'workspace' ? 'workspace' : 'global');
+      sourceBadge.textContent = server.source === 'workspace' ? 'WORKSPACE' : 'GLOBAL';
+
+      const runtimeBadge = document.createElement('span');
+      runtimeBadge.className = 'mcp-badge mcp-runtime ' + getMcpStatusVariant(server.status);
+      runtimeBadge.textContent = formatMcpStatusLabel(server.status);
+
+      const badges = document.createElement('div');
+      badges.className = 'mcp-badges-row';
+      badges.appendChild(transport);
+      badges.appendChild(sourceBadge);
+      if (server.overridesGlobal) {
+        const overrideBadge = document.createElement('span');
+        overrideBadge.className = 'mcp-badge override';
+        overrideBadge.textContent = 'OVERRIDES GLOBAL';
+        badges.appendChild(overrideBadge);
+      }
+      badges.appendChild(runtimeBadge);
+
+      if (server.statusError) {
+        runtimeBadge.title = server.statusError;
+      }
+
       info.appendChild(name);
-      info.appendChild(transport);
+      info.appendChild(badges);
 
       card.appendChild(status);
       card.appendChild(info);
@@ -2867,6 +2935,30 @@
 
     showView('mcp-editor');
     mcpNameInput.focus();
+  }
+
+  function formatMcpStatusLabel(status) {
+    switch (status) {
+      case 'loading': return 'Loading';
+      case 'activating': return 'Activating';
+      case 'activated': return 'Activated';
+      case 'ready': return 'Ready';
+      case 'error': return 'Error';
+      default: return 'Disconnected';
+    }
+  }
+
+  function getMcpStatusVariant(status) {
+    if (status === 'ready' || status === 'activated') {
+      return 'connected';
+    }
+    if (status === 'loading' || status === 'activating') {
+      return 'pending';
+    }
+    if (status === 'error') {
+      return 'error';
+    }
+    return 'disconnected';
   }
 
   function buildMcpServerFromForm() {

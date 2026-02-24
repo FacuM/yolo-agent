@@ -373,6 +373,12 @@ Be thorough but concise. This summary will replace the full conversation history
         case 'testMcpConnection':
           await this.handleTestMcpConnection(message.server);
           break;
+        case 'openMcpGlobalSettings':
+          await this.handleOpenMcpGlobalSettings();
+          break;
+        case 'openMcpWorkspaceSettings':
+          await this.handleOpenMcpWorkspaceSettings();
+          break;
         case 'compactContext':
           await this.handleCompactContext();
           break;
@@ -2207,6 +2213,8 @@ IMPORTANT RULES:
     const servers = this.mcpConfigManager.getConfigs();
     const serverList = servers.map(s => ({
       ...s,
+      status: this.mcpClient.getServerStatus(s.id).status,
+      statusError: this.mcpClient.getServerStatus(s.id).error,
       connected: this.mcpClient.isConnected(s.id),
     }));
     this.postMessage({
@@ -2259,6 +2267,28 @@ IMPORTANT RULES:
         type: 'mcpConnectionTest',
         success: false,
         error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async handleOpenMcpGlobalSettings(): Promise<void> {
+    try {
+      await this.mcpConfigManager.openGlobalSettingsFile();
+    } catch (err) {
+      this.postMessage({
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async handleOpenMcpWorkspaceSettings(): Promise<void> {
+    try {
+      await this.mcpConfigManager.openWorkspaceSettingsFile();
+    } catch (err) {
+      this.postMessage({
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
       });
     }
   }
@@ -2861,6 +2891,48 @@ IMPORTANT RULES:
         <span class="header-title">MCP Servers</span>
       </div>
       <div id="mcp-content">
+        <div class="mcp-settings-actions">
+          <button id="edit-mcp-global-settings-btn" class="secondary-btn">🌐 Edit Global Settings</button>
+          <button id="edit-mcp-workspace-settings-btn" class="secondary-btn">📁 Edit Workspace Settings</button>
+        </div>
+        <div class="mcp-json-hint">
+          <strong>JSON format</strong>
+          <div class="mcp-json-hint-text">Top-level object: <code>{ "version": 1, "servers": [...] }</code>. Each server requires <code>id</code>, <code>name</code>, <code>enabled</code>, and <code>transport</code> (<code>"stdio"</code> or <code>"sse"</code>). For <code>stdio</code>: use <code>command</code>, optional <code>args</code> and <code>env</code>. For <code>sse</code>: use <code>url</code>. Workspace settings override global settings when IDs match.</div>
+          <pre class="mcp-json-hint-example">{
+  "version": 1,
+  "servers": [
+    {
+      "id": "filesystem",
+      "name": "Filesystem",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "env": {
+        "NODE_ENV": "production"
+      }
+    },
+    {
+      "id": "github",
+      "name": "GitHub MCP",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "\${env:GITHUB_TOKEN}"
+      }
+    },
+    {
+      "id": "remote-sse",
+      "name": "Remote SSE",
+      "enabled": false,
+      "transport": "sse",
+      "url": "https://example.com/sse"
+    }
+  ]
+}</pre>
+        </div>
         <div id="mcp-servers-list"></div>
         <button id="add-mcp-server-btn" class="primary-btn">+ Add MCP Server</button>
       </div>

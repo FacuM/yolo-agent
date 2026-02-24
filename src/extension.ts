@@ -28,6 +28,7 @@ let mcpConfigManager: McpConfigManager;
 let mcpClient: McpClient;
 let mcpToolBridge: McpToolBridge;
 let sandboxManager: SandboxManager | undefined;
+let chatViewProvider: ChatViewProvider | undefined;
 
 export async function activate(
   context: vscode.ExtensionContext
@@ -92,7 +93,11 @@ export async function activate(
     }
 
     // Notify webview to refresh MCP tools (view may not be open yet)
-    chatViewProvider.refreshMcpTools?.();
+    chatViewProvider?.refreshMcpTools?.();
+  });
+
+  mcpClient.onDidStatusChange(() => {
+    chatViewProvider?.refreshMcpTools?.();
   });
 
   // Initialize tools with sandbox awareness (optional sandboxManager)
@@ -134,7 +139,7 @@ export async function activate(
   }
 
   // Register webview sidebar provider
-  const chatViewProvider = new ChatViewProvider(
+  chatViewProvider = new ChatViewProvider(
     context.globalState,
     context.extensionUri,
     registry,
@@ -157,7 +162,7 @@ export async function activate(
   context.subscriptions.push(
     vscode.commands.registerCommand('yoloAgent.newChat', () => {
       // Show the sidebar view if it's already resolved
-      if (chatViewProvider.view) {
+      if (chatViewProvider?.view) {
         chatViewProvider.view.show?.(true);
       }
     })

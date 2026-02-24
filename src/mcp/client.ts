@@ -6,7 +6,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { McpServerConfig, McpToolDefinition, McpToolResult } from './types';
+import { McpServerConfig, McpServerRuntimeStatus, McpToolDefinition, McpToolResult } from './types';
 
 interface McpConnection {
   client: Client;
@@ -16,7 +16,37 @@ interface McpConnection {
 
 export class McpClient {
   private connections: Map<string, McpConnection> = new Map();
+  private statuses: Map<string, { status: McpServerRuntimeStatus; error?: string }> = new Map();
+  private onStatusChangeCallbacks: Set<() => void> = new Set();
   private static readonly CONNECTION_TIMEOUT_MS = 15_000;
+
+  private setStatus(serverId: string, status: McpServerRuntimeStatus, error?: string): void {
+    this.statuses.set(serverId, { status, error });
+    this.notifyStatusChange();
+  }
+
+  private notifyStatusChange(): void {
+    for (const callback of this.onStatusChangeCallbacks) {
+      try {
+        callback();
+      } catch (error) {
+        console.error('Error in MCP status callback:', error);
+      }
+    }
+  }
+
+  onDidStatusChange(callback: () => void): { dispose: () => void } {
+    this.onStatusChangeCallbacks.add(callback);
+    return {
+      dispose: () => {
+        this.onStatusChangeCallbacks.delete(callback);
+      },
+    };
+  }
+
+  getServerStatus(serverId: string): { status: McpServerRuntimeStatus; error?: string } {
+    return this.statuses.get(serverId) ?? { status: 'disconnected' };
+  }
 
   /**
    * Wrap a promise with a timeout. Rejects if the promise doesn't settle within `ms`.
@@ -35,6 +65,8 @@ export class McpClient {
    * Connect to an MCP server (with timeout protection)
    */
   async connect(config: McpServerConfig): Promise<void> {
+    this.setStatus(config.id, 'loading');
+
     if (this.connections.has(config.id)) {
       await this.disconnect(config.id);
     }
@@ -45,6 +77,7 @@ export class McpClient {
 
       if (config.transport === 'stdio') {
         if (!config.command) {
+          this.setStatus(config.id, 'error', 'STDIO transport requires a command');
           throw new Error('STDIO transport requires a command');
         }
 
@@ -61,6 +94,7 @@ export class McpClient {
           capabilities: {},
         });
 
+        this.setStatus(config.id, 'activating');
         await this.withTimeout(
           client.connect(transport),
           McpClient.CONNECTION_TIMEOUT_MS,
@@ -68,6 +102,7 @@ export class McpClient {
         );
       } else if (config.transport === 'sse') {
         if (!config.url) {
+          this.setStatus(config.id, 'error', 'SSE transport requires a URL');
           throw new Error('SSE transport requires a URL');
         }
 
@@ -80,14 +115,18 @@ export class McpClient {
           capabilities: {},
         });
 
+        this.setStatus(config.id, 'activating');
         await this.withTimeout(
           client.connect(transport),
           McpClient.CONNECTION_TIMEOUT_MS,
           `connecting to "${config.name}" (sse)`,
         );
       } else {
+        this.setStatus(config.id, 'error', `Unsupported transport type: ${(config as any).transport}`);
         throw new Error(`Unsupported transport type: ${(config as any).transport}`);
       }
+
+      this.setStatus(config.id, 'activated');
 
       // Discover tools (also with timeout)
       const toolsResponse = await this.withTimeout(
@@ -107,7 +146,9 @@ export class McpClient {
         transport,
         tools,
       });
+      this.setStatus(config.id, 'ready');
     } catch (error) {
+      this.setStatus(config.id, 'error', error instanceof Error ? error.message : String(error));
       throw new Error(`Failed to connect to MCP server "${config.name}": ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -192,6 +233,7 @@ export class McpClient {
     }
 
     this.connections.delete(serverId);
+    this.setStatus(serverId, 'disconnected');
   }
 
   /**

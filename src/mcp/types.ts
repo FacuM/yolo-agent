@@ -4,6 +4,8 @@
  */
 
 export type McpTransportType = 'stdio' | 'sse';
+export type McpConfigSource = 'global' | 'workspace';
+export type McpServerRuntimeStatus = 'disconnected' | 'loading' | 'activating' | 'activated' | 'ready' | 'error';
 
 export interface McpServerConfig {
   id: string;
@@ -14,6 +16,12 @@ export interface McpServerConfig {
   args?: string[];
   env?: Record<string, string>;
   url?: string;
+}
+
+export interface ResolvedMcpServerConfig extends McpServerConfig {
+  source: McpConfigSource;
+  configPath: string;
+  overridesGlobal?: boolean;
 }
 
 export interface McpToolDefinition {

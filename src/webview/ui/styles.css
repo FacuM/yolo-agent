@@ -2026,6 +2026,49 @@ body {
   padding: 8px;
 }
 
+.mcp-settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.mcp-settings-actions button {
+  flex: 1;
+}
+
+.mcp-json-hint {
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  background: var(--vscode-editor-background);
+}
+
+.mcp-json-hint strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.mcp-json-hint-text {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--vscode-descriptionForeground);
+}
+
+.mcp-json-hint-example {
+  margin-top: 8px;
+  margin-bottom: 0;
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-textCodeBlock-background);
+  color: var(--vscode-editor-foreground);
+  overflow-x: auto;
+  white-space: pre;
+}
+
 /* MCP Server Cards */
 #mcp-servers-list,
 #mcp-servers-inline-list {
@@ -2058,11 +2101,19 @@ body {
 }
 
 .mcp-status.connected {
-  background: #4caf50;
+  background: var(--vscode-testing-iconPassed);
+}
+
+.mcp-status.pending {
+  background: var(--vscode-testing-iconQueued);
+}
+
+.mcp-status.error {
+  background: var(--vscode-testing-iconFailed);
 }
 
 .mcp-status.disconnected {
-  background: #f44336;
+  background: var(--vscode-disabledForeground);
 }
 
 .mcp-info {
@@ -2085,6 +2136,38 @@ body {
   color: var(--vscode-badge-foreground);
   border-radius: 3px;
   margin-left: 6px;
+}
+
+.mcp-badges-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 2px;
+  margin-left: -6px;
+}
+
+.mcp-badge.global,
+.mcp-badge.workspace,
+.mcp-badge.override,
+.mcp-badge.mcp-runtime {
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.mcp-badge.mcp-runtime.connected {
+  color: var(--vscode-testing-iconPassed);
+}
+
+.mcp-badge.mcp-runtime.pending {
+  color: var(--vscode-testing-iconQueued);
+}
+
+.mcp-badge.mcp-runtime.error {
+  color: var(--vscode-testing-iconFailed);
+}
+
+.mcp-badge.mcp-runtime.disconnected {
+  color: var(--vscode-disabledForeground);
 }
 
 .mcp-actions {
