@@ -2133,7 +2133,7 @@
     if (contextSkills.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'settings-empty';
-      empty.textContent = 'No skills found in .yolo-agent/skills/';
+      empty.textContent = 'No skills found in .yolo-agent/skills/, .claude/skills/, .kilo/skills/, or .cline/skills/';
       contextSkillsList.appendChild(empty);
       return;
     }
