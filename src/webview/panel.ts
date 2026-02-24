@@ -244,13 +244,64 @@ Be thorough but concise. This summary will replace the full conversation history
           break;
         case 'proceedWithPlan':
           {
-            // Disable planning mode and route the plan through the normal
-            // message handling pipeline so that Smart To-Do orchestration,
-            // sandbox isolation, and mode-specific behaviour are all preserved.
+            // Disable planning mode — we're moving to implementation.
             this.planningMode = false;
             this.postMessage({ type: 'planningModeChanged', enabled: false });
             const planText = message.planText as string;
-            if (planText) {
+            if (planText && this.modeManager.isSmartTodoMode()) {
+              // ── Smart To-Do shortcut ──
+              // The user already has a fully-formed plan from the planning
+              // phase.  Parse TODOs directly from it and jump straight into the
+              // execute→verify loop, skipping the redundant LLM planning call
+              // that would re-interpret the plan in an unpredictable format.
+              const session = this.sessionManager.getOrCreateActiveSession(
+                this.registry.getActiveProviderId(),
+                this.registry.getActiveModelId(),
+              );
+              const sessionId = session.id;
+              const userText = planText;
+
+              // Save message & initialise Smart To-Do state
+              this.sessionManager.addMessage(sessionId, { role: 'user', content: userText });
+              this.sessionManager.initSmartTodo(sessionId, userText);
+
+              const isSandboxed = this.modeManager.isSandboxedSmartTodoMode();
+              const sandboxPreamble = isSandboxed
+                ? `**SANDBOX MODE ACTIVE:** You are working inside a sandboxed environment. ` +
+                  `Use runTerminal for running commands (it enforces software-level restrictions automatically). ` +
+                  `If you need full OS-level isolation, first call createSandbox, then use runSandboxedCommand. ` +
+                  `Do NOT call runSandboxedCommand unless you have called createSandbox first. ` +
+                  `Dangerous commands (sudo, pkill, killall, rm -rf /, etc.) are always blocked.\n\n`
+                : '';
+
+              // Parse TODOs from the plan the user already approved
+              let todos = this.parseTodosFromPlan(planText);
+              if (todos.length === 0) {
+                // Absolute fallback: treat the whole plan as a single task
+                todos = [{ id: 1, title: 'Complete plan', status: 'pending' as TodoItemStatus, detail: planText }];
+              }
+
+              this.postSessionMessage(sessionId, {
+                type: 'smartTodoUpdate',
+                phase: 'executing',
+                todos,
+                iteration: 0,
+              });
+
+              try {
+                await this.executePlanLoop(sessionId, userText, todos, sandboxPreamble);
+              } catch (err) {
+                if (!(err instanceof Error && err.message.includes('abort'))) {
+                  this.postSessionMessage(sessionId, {
+                    type: 'error',
+                    message: `Smart To-Do loop error: ${err instanceof Error ? err.message : String(err)}`,
+                  });
+                }
+                this.cancelledSessions.delete(sessionId);
+                this.sessionManager.setSessionStatus(sessionId, 'idle');
+              }
+            } else if (planText) {
+              // Non-Smart-To-Do mode: send the plan as an implementation prompt
               const implementPrompt = `Implement the following plan. Follow it step by step, using the tools available to you. Do not ask for confirmation — just execute each step.\n\n---\n${planText}\n---`;
               await this.handleSendMessage(implementPrompt);
             }
@@ -2433,6 +2484,12 @@ IMPORTANT RULES:
           <button id="send-btn" title="Send">\u27A4</button>
         </div>
         <div id="autocomplete-dropdown" class="autocomplete-dropdown hidden"></div>
+        <div class="steering-row">
+          <button class="steering-btn" data-steer="continue">Continue</button>
+          <button class="steering-btn" data-steer="retry">Retry</button>
+          <button class="steering-btn" data-steer="summarize">Summarize</button>
+          <button class="steering-btn" data-steer="expand">Expand</button>
+        </div>
       </div>
 
       <!-- Messages in middle -->
@@ -2457,10 +2514,6 @@ IMPORTANT RULES:
             <span id="context-tracker-label" class="context-tracker-label">0%</span>
           </button>
           <span class="control-separator">\u00B7</span>
-          <button class="steering-btn" data-steer="continue">Continue</button>
-          <button class="steering-btn" data-steer="retry">Retry</button>
-          <button class="steering-btn" data-steer="summarize">Summarize</button>
-          <button class="steering-btn" data-steer="expand">Expand</button>
           <span style="flex:1"></span>
           <span id="api-spinner" class="api-spinner hidden">
             <span class="spinner-dot"></span> Waiting for API...
