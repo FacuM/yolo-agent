@@ -2617,6 +2617,15 @@ IMPORTANT RULES:
       <!-- Messages in middle -->
       <div id="messages"></div>
 
+      <!-- Compaction countdown banner -->
+      <div id="compaction-banner" class="compaction-banner hidden">
+        <span id="compaction-banner-text"></span>
+        <div class="compaction-banner-actions">
+          <button id="compaction-edit-btn" class="secondary-btn btn-sm">Edit Context</button>
+          <button id="compaction-now-btn" class="primary-btn btn-sm">Compact Now</button>
+        </div>
+      </div>
+
       <!-- Controls at bottom -->
       <div id="controls-section">
         <div class="control-row">
@@ -2683,6 +2692,22 @@ IMPORTANT RULES:
       <div id="sessions-list"></div>
     </div>
 
+    <!-- Digest Editor (compaction) -->
+    <div id="digest-view" class="hidden">
+      <div id="digest-header">
+        <button id="digest-back-btn" title="Cancel compaction">\u2190</button>
+        <span class="header-title">Edit Context Before Compaction</span>
+      </div>
+      <div id="digest-content">
+        <p class="digest-hint">Edit the conversation digest below. The AI will summarize this into a compact context.</p>
+        <textarea id="digest-textarea" spellcheck="false"></textarea>
+        <div class="digest-actions">
+          <button id="digest-compact-btn" class="primary-btn">Compact This</button>
+          <button id="digest-cancel-btn" class="secondary-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Settings: Provider List -->
     <div id="settings-view" class="hidden">
       <div id="settings-header">
@@ -2692,6 +2717,7 @@ IMPORTANT RULES:
       <div id="settings-tabs">
         <button id="tab-providers" class="tab-btn active">Providers</button>
         <button id="tab-mcp" class="tab-btn">MCP Servers</button>
+        <button id="tab-general" class="tab-btn">General</button>
       </div>
       <div id="settings-content">
         <div id="providers-panel">
@@ -2701,6 +2727,35 @@ IMPORTANT RULES:
         <div id="mcp-panel" class="hidden">
           <div id="mcp-servers-inline-list"></div>
           <button id="mcp-settings-btn" class="primary-btn">Manage MCP Servers</button>
+        </div>
+        <div id="general-panel" class="hidden">
+          <div class="settings-section">
+            <h3>Context Compaction</h3>
+            <div class="form-group">
+              <label>Compaction Method</label>
+              <div class="radio-group" id="compaction-method-group">
+                <label class="radio-label">
+                  <input type="radio" name="compaction-method" value="semi-automatic" checked>
+                  <span>Semi-automatic with timeout</span>
+                  <span class="radio-description">Waits for you to manually edit context; auto-compacts if no response</span>
+                </label>
+                <label class="radio-label">
+                  <input type="radio" name="compaction-method" value="automatic">
+                  <span>Automatic (immediate)</span>
+                  <span class="radio-description">Immediately summarizes context automatically</span>
+                </label>
+                <label class="radio-label">
+                  <input type="radio" name="compaction-method" value="manual">
+                  <span>Manual</span>
+                  <span class="radio-description">Only manual edits will resume the agent</span>
+                </label>
+              </div>
+            </div>
+            <div class="form-group" id="timeout-group">
+              <label for="compaction-timeout">Automatic compaction timeout (seconds)</label>
+              <input type="number" id="compaction-timeout" min="10" max="300" value="60" step="5">
+            </div>
+          </div>
         </div>
       </div>
     </div>
