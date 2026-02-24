@@ -135,6 +135,7 @@ export async function activate(
 
   // Register webview sidebar provider
   const chatViewProvider = new ChatViewProvider(
+    context.globalState,
     context.extensionUri,
     registry,
     profileManager,

@@ -134,8 +134,10 @@ Be thorough but concise. This summary will replace the full conversation history
   private activeFileEnabled = false;
   private planningMode = false;
   private sandboxManager?: SandboxManager;
+  private globalState: vscode.Memento;
 
   constructor(
+    globalState: vscode.Memento,
     extensionUri: vscode.Uri,
     registry: ProviderRegistry,
     profileManager: ProfileManager,
@@ -146,6 +148,7 @@ Be thorough but concise. This summary will replace the full conversation history
     mcpClient: McpClient,
     sandboxManager?: SandboxManager
   ) {
+    this.globalState = globalState;
     this.extensionUri = extensionUri;
     this.registry = registry;
     this.profileManager = profileManager;
