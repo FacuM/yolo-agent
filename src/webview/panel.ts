@@ -137,6 +137,7 @@ Be thorough but concise. This summary will replace the full conversation history
   private sandboxManager?: SandboxManager;
   private globalState: vscode.Memento;
   private compactionResolver: ((action: 'compacted' | 'cancelled') => void) | null = null;
+  private compactionPendingSessionId: string | null = null;
 
   constructor(
     globalState: vscode.Memento,
@@ -209,6 +210,11 @@ Be thorough but concise. This summary will replace the full conversation history
             const activeId = this.sessionManager.getActiveSessionId();
             if (activeId) {
               this.cancelledSessions.add(activeId);
+              if (this.compactionPendingSessionId === activeId && this.compactionResolver) {
+                this.compactionResolver('cancelled');
+                this.compactionResolver = null;
+                this.compactionPendingSessionId = null;
+              }
               const ctrl = this.abortControllers.get(activeId);
               if (ctrl) {
                 ctrl.abort();
@@ -383,33 +389,39 @@ Be thorough but concise. This summary will replace the full conversation history
           await this.handleCompactContext();
           break;
         case 'compactNow': {
-          const activeId = this.sessionManager.getActiveSessionId();
-          if (activeId) {
-            await this.performCompaction(activeId);
-            this.sendContextUsage(activeId);
-            this.postSessionMessage(activeId, { type: 'compactionComplete' });
+          const targetSessionId = this.compactionPendingSessionId ?? this.sessionManager.getActiveSessionId();
+          if (targetSessionId) {
+            await this.performCompaction(targetSessionId);
+            this.sendContextUsage(targetSessionId);
+            this.postSessionMessage(targetSessionId, { type: 'compactionComplete' });
           }
           if (this.compactionResolver) {
             this.compactionResolver('compacted');
+            this.compactionResolver = null;
           }
+          this.compactionPendingSessionId = null;
           break;
         }
         case 'compactWithDigest': {
-          const activeId = this.sessionManager.getActiveSessionId();
-          if (activeId && message.editedDigest) {
-            await this.performCompactionWithDigest(activeId, message.editedDigest);
-            this.sendContextUsage(activeId);
-            this.postSessionMessage(activeId, { type: 'compactionComplete' });
+          const targetSessionId = this.compactionPendingSessionId ?? this.sessionManager.getActiveSessionId();
+          if (targetSessionId && message.editedDigest) {
+            await this.performCompactionWithDigest(targetSessionId, message.editedDigest);
+            this.sendContextUsage(targetSessionId);
+            this.postSessionMessage(targetSessionId, { type: 'compactionComplete' });
           }
           if (this.compactionResolver) {
             this.compactionResolver('compacted');
+            this.compactionResolver = null;
           }
+          this.compactionPendingSessionId = null;
           break;
         }
         case 'compactCancel':
           if (this.compactionResolver) {
             this.compactionResolver('cancelled');
+            this.compactionResolver = null;
           }
+          this.compactionPendingSessionId = null;
           break;
         case 'getCompactionSettings':
           this.postMessage({
@@ -763,10 +775,12 @@ IMPORTANT RULES:
             }
 
             // Pause: wait for user action
+            this.compactionPendingSessionId = sessionId;
             const action = await new Promise<'compacted' | 'cancelled'>((resolve) => {
               this.compactionResolver = resolve;
             });
             this.compactionResolver = null;
+            this.compactionPendingSessionId = null;
 
             if (action === 'cancelled') {
               // User cancelled — continue without compaction (risky but their choice)
@@ -791,9 +805,6 @@ IMPORTANT RULES:
         }
 
         const response = await provider.sendMessage(messages, requestOpts, onChunk);
-        if (!firstChunkReceived) {
-          this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
-        }
         if (!firstChunkReceived) {
           this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
         }
@@ -1092,6 +1103,10 @@ IMPORTANT RULES:
       return `[ERROR] ${errMsg}`;
     } finally {
       this.abortControllers.delete(sessionId);
+      if (this.compactionPendingSessionId === sessionId) {
+        this.compactionPendingSessionId = null;
+        this.compactionResolver = null;
+      }
     }
 
     return responseText;

@@ -14,9 +14,29 @@ const DEFAULTS: CompactionSettings = {
 
 const SETTINGS_KEY = 'yoloAgent.compactionSettings';
 
+function normalizeMethod(method: unknown): CompactionMethod {
+  return method === 'automatic' || method === 'manual' || method === 'semi-automatic'
+    ? method
+    : DEFAULTS.method;
+}
+
+function normalizeTimeout(timeout: unknown): number {
+  const numeric = typeof timeout === 'number' ? timeout : Number(timeout);
+  if (!Number.isFinite(numeric)) { return DEFAULTS.timeoutSeconds; }
+  const rounded = Math.round(numeric);
+  return Math.min(300, Math.max(10, rounded));
+}
+
+function normalizeSettings(settings: Partial<CompactionSettings> | undefined): CompactionSettings {
+  return {
+    method: normalizeMethod(settings?.method),
+    timeoutSeconds: normalizeTimeout(settings?.timeoutSeconds),
+  };
+}
+
 export function getCompactionSettings(globalState: vscode.Memento): CompactionSettings {
   const stored = globalState.get<Partial<CompactionSettings>>(SETTINGS_KEY);
-  return { ...DEFAULTS, ...stored };
+  return normalizeSettings(stored);
 }
 
 export async function saveCompactionSettings(
@@ -24,5 +44,5 @@ export async function saveCompactionSettings(
   settings: Partial<CompactionSettings>
 ): Promise<void> {
   const current = getCompactionSettings(globalState);
-  await globalState.update(SETTINGS_KEY, { ...current, ...settings });
+  await globalState.update(SETTINGS_KEY, normalizeSettings({ ...current, ...settings }));
 }
