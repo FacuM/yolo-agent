@@ -2481,7 +2481,14 @@ IMPORTANT RULES:
         <div id="file-chips" class="file-chips hidden"></div>
         <div class="input-wrapper">
           <textarea id="message-input" placeholder="Ask YOLO Agent... (@ to reference files)" rows="1" data-autoresize></textarea>
-          <button id="send-btn" title="Send">\u27A4</button>
+          <div class="send-btn-group">
+            <button id="send-btn" title="Send">\u27A4</button>
+            <button id="send-mode-btn" class="send-mode-caret" title="Send mode">\u25BE</button>
+            <div id="send-mode-menu" class="send-mode-menu hidden">
+              <button class="send-mode-option" data-mode="steer" title="Interrupt &amp; send immediately (Enter)">\u26A1 Steer <kbd>Enter</kbd></button>
+              <button class="send-mode-option" data-mode="queue" title="Add to queue (Ctrl+Enter)">\u{1F4CB} Queue <kbd>Ctrl+Enter</kbd></button>
+            </div>
+          </div>
         </div>
         <div id="autocomplete-dropdown" class="autocomplete-dropdown hidden"></div>
         <div class="steering-row">

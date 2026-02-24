@@ -78,8 +78,6 @@ Available modes:
 - sandbox: Isolated orchestrator with OS-level restrictions (default)
 - agent: Full autonomy with all tools
 - ask: Chat only, no tool execution
-- plan: Read-only access for planning
-
 Use this when:
 - Sandbox work is complete and you need full agent capabilities
 - You want to switch from planning to execution
@@ -89,7 +87,7 @@ Use this when:
       properties: {
         mode: {
           type: 'string',
-          enum: ['sandbox', 'agent', 'ask', 'plan'],
+          enum: ['sandbox', 'agent', 'ask'],
           description: 'The mode to switch to',
         },
         reason: {
@@ -117,7 +115,7 @@ Use this when:
     const intendedActions = (params.intendedActions as string[]) || [];
 
     // Validate mode
-    const validModes = ['sandbox', 'agent', 'ask', 'plan'];
+    const validModes = ['sandbox', 'agent', 'ask'];
     if (!validModes.includes(targetMode)) {
       return {
         content: `Invalid mode: ${targetMode}. Valid modes are: ${validModes.join(', ')}`,
@@ -210,7 +208,6 @@ Use this when:
 You now have:
 ${targetMode === 'agent' ? '- Full autonomy with all tools\n- Unrestricted command execution' : ''}
 ${targetMode === 'ask' ? '- Chat-only interface\n- No tool execution' : ''}
-${targetMode === 'plan' ? '- Read-only access\n- Can view files and code' : ''}
 ${targetMode === 'sandbox' ? '- OS-level sandbox isolation (if available)\n- Restricted command execution\n- File modification only within sandbox' : ''}`,
       };
     } catch (err) {

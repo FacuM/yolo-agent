@@ -183,6 +183,36 @@
   // ===== Chat Event Listeners =====
   sendBtn.addEventListener('click', sendMessage);
 
+  // Send-mode context menu (caret button)
+  const sendModeBtn = document.getElementById('send-mode-btn');
+  const sendModeMenu = document.getElementById('send-mode-menu');
+
+  sendModeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    sendModeMenu.classList.toggle('hidden');
+  });
+
+  // Close menu on outside click
+  document.addEventListener('click', () => {
+    if (!sendModeMenu.classList.contains('hidden')) {
+      sendModeMenu.classList.add('hidden');
+    }
+  });
+
+  // Wire send-mode menu options
+  document.querySelectorAll('.send-mode-option').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendModeMenu.classList.add('hidden');
+      const mode = btn.dataset.mode;
+      if (mode === 'steer') {
+        sendSteer();
+      } else if (mode === 'queue') {
+        sendToQueue();
+      }
+    });
+  });
+
   inputEl.addEventListener('keydown', (e) => {
     // Handle autocomplete navigation
     if (autocompleteActive) {
@@ -216,7 +246,15 @@
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      if (isStreaming && e.ctrlKey) {
+        // Ctrl+Enter while streaming → queue
+        sendToQueue();
+      } else if (isStreaming) {
+        // Enter while streaming → steer (interrupt & send)
+        sendSteer();
+      } else {
+        sendMessage();
+      }
     }
   });
 
@@ -1258,14 +1296,16 @@
     if (isStreaming) {
       sendBtn.disabled = false; // Always enabled — sends to queue when streaming
       sendBtn.classList.add('queue-mode');
-      sendBtn.title = 'Add to queue';
-      inputEl.placeholder = 'Type to queue a message\u2026';
+      sendModeBtn.classList.add('queue-mode');
+      sendBtn.title = 'Add to queue (Ctrl+Enter) · Enter to steer';
+      inputEl.placeholder = 'Enter to steer · Ctrl+Enter to queue\u2026';
       document.querySelectorAll('.steering-btn').forEach(btn => {
         btn.classList.add('interrupt');
         btn.title = 'Stop & ' + (btn.dataset.steer || 'steer');
       });
     } else {
       sendBtn.classList.remove('queue-mode');
+      sendModeBtn.classList.remove('queue-mode');
       sendBtn.title = 'Send';
       sendBtn.disabled = false;
       inputEl.placeholder = 'Ask YOLO Agent... (@ to reference files)';
@@ -1581,6 +1621,32 @@
       chip.appendChild(removeBtn);
       fileChips.appendChild(chip);
     }
+  }
+
+  /**
+   * Steer: interrupt the current generation and send the message immediately.
+   */
+  function sendSteer() {
+    const text = inputEl.value.trim();
+    if (!text) { return; }
+    if (isStreaming) {
+      stopGeneration();
+    }
+    // Small delay to let cancellation propagate before sending
+    setTimeout(() => sendMessageWithPrompt(text), 100);
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
+  }
+
+  /**
+   * Queue: add the current input to the command queue (processed after streaming ends).
+   */
+  function sendToQueue() {
+    const text = inputEl.value.trim();
+    if (!text) { return; }
+    addToQueue({ type: 'custom', text });
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
   }
 
   function sendMessage() {

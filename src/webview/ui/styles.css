@@ -1111,6 +1111,91 @@ body {
   opacity: 1;
 }
 
+/* Send button group — split button with caret */
+.send-btn-group {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+}
+
+.send-btn-group #send-btn {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.send-mode-caret {
+  padding: 0 4px;
+  height: 40px;
+  min-width: 20px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border: none;
+  border-left: 1px solid rgba(255,255,255,0.15);
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+  cursor: pointer;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.send-mode-caret:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+/* Send mode context menu */
+.send-mode-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  min-width: 180px;
+  background: var(--vscode-menu-background, var(--vscode-dropdown-background));
+  color: var(--vscode-menu-foreground, var(--vscode-dropdown-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-dropdown-border, transparent));
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  z-index: 1000;
+  padding: 4px 0;
+  overflow: hidden;
+}
+
+.send-mode-menu.hidden {
+  display: none;
+}
+
+.send-mode-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 12px;
+  background: none;
+  color: inherit;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--vscode-font-family);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.send-mode-option:hover {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+  color: var(--vscode-menu-selectionForeground, inherit);
+}
+
+.send-mode-option kbd {
+  margin-left: auto;
+  padding: 1px 5px;
+  font-size: 10px;
+  background: rgba(128,128,128,0.2);
+  border: 1px solid rgba(128,128,128,0.3);
+  border-radius: 3px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  opacity: 0.7;
+}
+
 /* Send button queue mode */
 #send-btn.queue-mode {
   background: var(--vscode-badge-background);
@@ -1119,6 +1204,15 @@ body {
 }
 
 #send-btn.queue-mode:hover {
+  opacity: 0.9;
+}
+
+.send-mode-caret.queue-mode {
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+}
+
+.send-mode-caret.queue-mode:hover {
   opacity: 0.9;
 }
 

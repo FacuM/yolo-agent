@@ -293,7 +293,7 @@ export class ModeSwitchPlanner {
             ? '🔓 Full autonomy enabled - all tools and commands available'
             : toMode === 'ask'
             ? '💬 Chat mode - no tool execution'
-            : '📖 Plan mode - read-only access',
+            : '� Chat mode - no tool execution',
         );
       }
     } else if (fromMode !== 'sandbox' && toMode === 'sandbox') {
@@ -309,8 +309,6 @@ export class ModeSwitchPlanner {
           ? '🔓 Full autonomy enabled'
           : toMode === 'ask'
           ? '💬 Chat mode - no tool execution'
-          : toMode === 'plan'
-          ? '📖 Plan mode - read-only access'
           : '🔒 Sandbox mode - restricted permissions',
       );
     }
