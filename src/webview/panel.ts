@@ -2714,13 +2714,23 @@ IMPORTANT RULES:
         <button id="settings-back-btn" title="Back to chat">\u2190</button>
         <span class="header-title">Settings</span>
       </div>
-      <div id="settings-tabs">
-        <button id="tab-general" class="tab-btn active">General</button>
-        <button id="tab-providers" class="tab-btn">Providers</button>
-        <button id="tab-mcp" class="tab-btn">MCP Servers</button>
-      </div>
-      <div id="settings-content">
-        <div id="general-panel">
+      <div class="settings-container">
+        <nav id="settings-sidebar" role="navigation" aria-label="Settings navigation">
+          <button class="sidebar-item active" data-tab="general" aria-current="page">
+            <span class="sidebar-icon">\u2699</span>
+            <span class="sidebar-label">General</span>
+          </button>
+          <button class="sidebar-item" data-tab="providers">
+            <span class="sidebar-icon">\u{1F50C}</span>
+            <span class="sidebar-label">Providers</span>
+          </button>
+          <button class="sidebar-item" data-tab="mcp">
+            <span class="sidebar-icon">\u{1F517}</span>
+            <span class="sidebar-label">MCP Servers</span>
+          </button>
+        </nav>
+        <div id="settings-content">
+          <div id="general-panel">
           <div class="settings-section">
             <h3>Context Compaction</h3>
             <div class="form-group">
@@ -2758,14 +2768,15 @@ IMPORTANT RULES:
               </div>
             </div>
           </div>
-        </div>
-        <div id="providers-panel" class="hidden">
-          <div id="profiles-list"></div>
-          <button id="add-profile-btn" class="primary-btn">+ Add Provider</button>
-        </div>
-        <div id="mcp-panel" class="hidden">
-          <div id="mcp-servers-inline-list"></div>
-          <button id="mcp-settings-btn" class="primary-btn">Manage MCP Servers</button>
+          </div>
+          <div id="providers-panel" class="hidden">
+            <div id="profiles-list"></div>
+            <button id="add-profile-btn" class="primary-btn">+ Add Provider</button>
+          </div>
+          <div id="mcp-panel" class="hidden">
+            <div id="mcp-servers-inline-list"></div>
+            <button id="mcp-settings-btn" class="primary-btn">Manage MCP Servers</button>
+          </div>
         </div>
       </div>
     </div>

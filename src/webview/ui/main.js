@@ -127,10 +127,8 @@
   const digestCompactBtn = document.getElementById('digest-compact-btn');
   const digestCancelBtn = document.getElementById('digest-cancel-btn');
 
-  // ===== Settings Tabs =====
-  const tabProviders = document.getElementById('tab-providers');
-  const tabMcp = document.getElementById('tab-mcp');
-  const tabGeneral = document.getElementById('tab-general');
+  // ===== Settings Sidebar =====
+  const settingsSidebar = document.getElementById('settings-sidebar');
   const providersPanel = document.getElementById('providers-panel');
   const mcpPanel = document.getElementById('mcp-panel');
   const generalPanel = document.getElementById('general-panel');
@@ -522,35 +520,34 @@
     showView('chat');
   });
 
-  // Settings tabs
-  tabProviders.addEventListener('click', () => {
-    tabProviders.classList.add('active');
-    tabMcp.classList.remove('active');
-    tabGeneral.classList.remove('active');
-    providersPanel.classList.remove('hidden');
-    mcpPanel.classList.add('hidden');
-    generalPanel.classList.add('hidden');
-    vscode.postMessage({ type: 'getProfiles' });
-  });
-
-  tabMcp.addEventListener('click', () => {
-    tabMcp.classList.add('active');
-    tabProviders.classList.remove('active');
-    tabGeneral.classList.remove('active');
-    mcpPanel.classList.remove('hidden');
-    providersPanel.classList.add('hidden');
-    generalPanel.classList.add('hidden');
-    vscode.postMessage({ type: 'getMcpServers' });
-  });
-
-  tabGeneral.addEventListener('click', () => {
-    tabGeneral.classList.add('active');
-    tabProviders.classList.remove('active');
-    tabMcp.classList.remove('active');
-    generalPanel.classList.remove('hidden');
-    providersPanel.classList.add('hidden');
-    mcpPanel.classList.add('hidden');
-    vscode.postMessage({ type: 'getCompactionSettings' });
+  // Settings sidebar navigation - event delegation
+  settingsSidebar.addEventListener('click', (e) => {
+    const item = e.target.closest('.sidebar-item');
+    if (!item) return;
+    
+    const tabId = item.dataset.tab;
+    
+    // Update active states
+    settingsSidebar.querySelectorAll('.sidebar-item').forEach(i => {
+      i.classList.remove('active');
+      i.removeAttribute('aria-current');
+    });
+    item.classList.add('active');
+    item.setAttribute('aria-current', 'page');
+    
+    // Show/hide panels
+    generalPanel.classList.toggle('hidden', tabId !== 'general');
+    providersPanel.classList.toggle('hidden', tabId !== 'providers');
+    mcpPanel.classList.toggle('hidden', tabId !== 'mcp');
+    
+    // Request data for the selected tab
+    if (tabId === 'providers') {
+      vscode.postMessage({ type: 'getProfiles' });
+    } else if (tabId === 'mcp') {
+      vscode.postMessage({ type: 'getMcpServers' });
+    } else if (tabId === 'general') {
+      vscode.postMessage({ type: 'getCompactionSettings' });
+    }
   });
 
   // Compaction method radio change
