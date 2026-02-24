@@ -3,7 +3,7 @@
   "displayName": "YOLO Agent",
   "description": "A coding agent for VS Code powered by multiple AI providers",
   "version": "0.0.1",
-  "publisher": "yolo-agent",
+  "publisher": "facuarmo",
   "repository": {
     "type": "git",
     "url": "https://github.com/FacuM/yolo-agent.git"
