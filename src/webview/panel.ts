@@ -103,6 +103,19 @@ Rules:
   /** Maximum tool-call ↔ LLM iterations within a single round */
   private static readonly MAX_TOOL_ITERATIONS = 25;
 
+  /** Fraction of context window used before triggering auto-compaction */
+  private static readonly CONTEXT_COMPACTION_THRESHOLD = 0.80;
+
+  /** System prompt for compacting conversation context */
+  private static readonly COMPACTION_PROMPT = `You are a context compaction assistant. Summarize the conversation so far into a concise but complete summary that preserves:
+- All key decisions made
+- Current state of work (what's done, what's pending)
+- Important file paths, code snippets, or technical details mentioned
+- Any errors encountered and their resolutions
+- The user's original request and goals
+
+Be thorough but concise. This summary will replace the full conversation history to free up context space.`;
+
   // ===== Instance fields =====
 
   private view?: vscode.WebviewView;
@@ -303,6 +316,9 @@ Rules:
           break;
         case 'testMcpConnection':
           await this.handleTestMcpConnection(message.server);
+          break;
+        case 'compactContext':
+          await this.handleCompactContext();
           break;
 
         // Active file context
@@ -603,12 +619,37 @@ IMPORTANT RULES:
         firstChunkReceived = false;
         this.postSessionMessage(sessionId, { type: 'waitingForApi' });
 
+        // ── Pre-overflow check: auto-compact if approaching context limit ──
+        const preCheckUsage = this.sessionManager.getTokenUsage(sessionId);
+        const contextLimit = await this.getActiveContextWindow();
+        const totalUsed = preCheckUsage.inputTokens + preCheckUsage.outputTokens;
+        if (contextLimit > 0 && totalUsed > contextLimit * ChatViewProvider.CONTEXT_COMPACTION_THRESHOLD && toolIteration > 0) {
+          this.postSessionMessage(sessionId, {
+            type: 'streamChunk',
+            content: '\n\n\u26A0\uFE0F *Context usage at ' + Math.round((totalUsed / contextLimit) * 100) + '% — auto-compacting to avoid overflow...*\n',
+          });
+          await this.performCompaction(sessionId);
+          // Rebuild messages array from compacted history
+          const compactedHistory = this.sessionManager.getHistory(sessionId);
+          messages.length = 0;
+          messages.push({ role: 'system', content: modePrompt });
+          messages.push(...compactedHistory);
+          messages.push({ role: 'user', content: 'Continue from where you left off. Here is what was happening: you were in tool iteration ' + toolIteration + ' of an ongoing task.' });
+          this.sendContextUsage(sessionId);
+        }
+
         const response = await provider.sendMessage(messages, requestOpts, onChunk);
         if (!firstChunkReceived) {
           this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
         }
         if (!firstChunkReceived) {
           this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
+        }
+
+        // Track token usage from this response
+        if (response.usage) {
+          this.sessionManager.addTokenUsage(sessionId, response.usage.inputTokens, response.usage.outputTokens);
+          this.sendContextUsage(sessionId);
         }
 
         if (response.thinking) {
@@ -954,6 +995,13 @@ IMPORTANT RULES:
         this.postSessionMessage(sessionId, { type: 'apiResponseStarted' });
       }
       responseText = response.content ?? '';
+
+      // Track token usage from planning round
+      if (response.usage) {
+        this.sessionManager.addTokenUsage(sessionId, response.usage.inputTokens, response.usage.outputTokens);
+        this.sendContextUsage(sessionId);
+      }
+
       this.postSessionMessage(sessionId, { type: 'messageComplete' });
     } catch (err) {
       // Handle abort/cancellation gracefully — don't show as error
@@ -1633,6 +1681,9 @@ IMPORTANT RULES:
       this.postMessage({ type: 'sessionResumed' });
     }
 
+    // Send context usage for this session
+    this.sendContextUsage(sessionId);
+
     this.sendSessionList();
   }
 
@@ -2083,6 +2134,109 @@ IMPORTANT RULES:
     this.view?.webview.postMessage(message);
   }
 
+  // ===== Context usage tracking & compaction =====
+
+  /**
+   * Get the context window size for the currently active model.
+   */
+  private async getActiveContextWindow(): Promise<number> {
+    const activeProviderId = this.registry.getActiveProviderId();
+    if (!activeProviderId) { return 0; }
+    const models = await this.registry.getModelsForProvider(activeProviderId);
+    const activeModelId = this.registry.getActiveModelId();
+    const model = models.find(m => m.id === activeModelId);
+    return model?.contextWindow ?? 0;
+  }
+
+  /**
+   * Send current context usage info to the webview.
+   */
+  private async sendContextUsage(sessionId: string): Promise<void> {
+    const usage = this.sessionManager.getTokenUsage(sessionId);
+    const contextWindow = await this.getActiveContextWindow();
+    const totalUsed = usage.inputTokens + usage.outputTokens;
+    const percentage = contextWindow > 0 ? Math.min(Math.round((totalUsed / contextWindow) * 100), 100) : 0;
+
+    this.postSessionMessage(sessionId, {
+      type: 'contextUsage',
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: totalUsed,
+      contextWindow,
+      percentage,
+    });
+  }
+
+  /**
+   * Perform context compaction: ask the LLM to summarize the conversation,
+   * then replace the history with the compacted summary.
+   */
+  private async performCompaction(sessionId: string): Promise<void> {
+    const history = this.sessionManager.getHistory(sessionId);
+    if (history.length <= 1) { return; }
+
+    // Build a digest of the conversation for the summary LLM call
+    const digest = history
+      .filter(m => !m.internal || m.content.includes('[Compacted conversation context]'))
+      .map(m => {
+        let prefix = m.role.toUpperCase();
+        if (m.toolCalls?.length) { prefix += ' (with tool calls: ' + m.toolCalls.map(tc => tc.name).join(', ') + ')'; }
+        if (m.toolResults?.length) { prefix += ' (tool results)'; }
+        return `[${prefix}]: ${m.content.slice(0, 2000)}`;
+      })
+      .join('\n\n');
+
+    const provider = this.registry.getActiveProvider();
+    if (!provider) { return; }
+
+    try {
+      const model = this.registry.getActiveModelId();
+      const summaryResponse = await provider.sendMessage(
+        [
+          { role: 'system', content: ChatViewProvider.COMPACTION_PROMPT },
+          { role: 'user', content: `Here is the conversation to summarize:\n\n${digest}` },
+        ],
+        { model, maxTokens: 2048 },
+        () => {} // No streaming needed for compaction
+      );
+
+      const summary = summaryResponse.content || 'No summary generated.';
+      this.sessionManager.compactHistory(sessionId, summary);
+
+      this.postSessionMessage(sessionId, {
+        type: 'streamChunk',
+        content: '\n\n\u2705 *Context compacted successfully.*\n',
+      });
+    } catch (err) {
+      this.postSessionMessage(sessionId, {
+        type: 'streamChunk',
+        content: '\n\n\u26A0\uFE0F *Context compaction failed: ' + (err instanceof Error ? err.message : String(err)) + '*\n',
+      });
+    }
+  }
+
+  /**
+   * Handle user-initiated compaction (clicking the context tracker).
+   */
+  private async handleCompactContext(): Promise<void> {
+    const activeId = this.sessionManager.getActiveSessionId();
+    if (!activeId) { return; }
+
+    const session = this.sessionManager.getActiveSession();
+    if (!session || session.status === 'busy') {
+      this.postMessage({ type: 'error', message: 'Cannot compact while the agent is busy.' });
+      return;
+    }
+
+    this.postMessage({
+      type: 'streamChunk',
+      content: '\n\n\u{1F504} *Compacting context...*\n',
+    });
+
+    await this.performCompaction(activeId);
+    this.sendContextUsage(activeId);
+  }
+
   private getHtmlContent(webview: vscode.Webview): string {
     const stylesUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'src', 'webview', 'ui', 'styles.css')
@@ -2148,6 +2302,11 @@ IMPORTANT RULES:
           <span class="control-separator">\u00B7</span>
           <button id="active-file-toggle" class="active-file-btn" title="Toggle active file as context">
             <span id="active-file-display">None</span>
+          </button>
+          <span class="control-separator">\u00B7</span>
+          <button id="context-tracker" class="context-tracker" title="Click to compact context">
+            <span id="context-tracker-bar" class="context-tracker-bar"><span id="context-tracker-fill" class="context-tracker-fill"></span></span>
+            <span id="context-tracker-label" class="context-tracker-label">0%</span>
           </button>
           <span class="control-separator">\u00B7</span>
           <button class="steering-btn" data-steer="continue">Continue</button>

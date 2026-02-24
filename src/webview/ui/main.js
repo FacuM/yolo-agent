@@ -82,6 +82,11 @@
   const sandboxDiscardBtn = document.getElementById('sandbox-discard-btn');
   const sandboxActionStatus = document.getElementById('sandbox-action-status');
 
+  // ===== Context Tracker Elements =====
+  const contextTracker = document.getElementById('context-tracker');
+  const contextTrackerFill = document.getElementById('context-tracker-fill');
+  const contextTrackerLabel = document.getElementById('context-tracker-label');
+
   // ===== Settings View Elements =====
   const settingsBackBtn = document.getElementById('settings-back-btn');
   const profilesList = document.getElementById('profiles-list');
@@ -160,6 +165,7 @@
   let autocompleteStartPos = -1;
   let autocompleteSelectedIndex = 0;
   let searchDebounceTimer = null;
+  let currentContextWindow = 0; // Context window size of active model
 
   const DEFAULT_BASE_URLS = {
     anthropic: 'https://api.anthropic.com',
@@ -384,6 +390,11 @@
 
   // Request initial active file state
   vscode.postMessage({ type: 'getActiveFile' });
+
+  // Context tracker click — trigger compaction
+  contextTracker.addEventListener('click', () => {
+    vscode.postMessage({ type: 'compactContext' });
+  });
 
   // ===== Settings Event Listeners =====
   settingsBackBtn.addEventListener('click', () => {
@@ -747,6 +758,10 @@
         activeFilePath = message.file;
         activeFileEnabled = message.enabled;
         updateActiveFileDisplay();
+        break;
+
+      case 'contextUsage':
+        updateContextTracker(message);
         break;
     }
   });
@@ -2253,6 +2268,12 @@
     modelList = models || [];
     activeModelId = newActiveModelId || '';
 
+    // Track the context window for the active model
+    const activeModel = modelList.find(m => m.id === activeModelId);
+    if (activeModel && activeModel.contextWindow) {
+      currentContextWindow = activeModel.contextWindow;
+    }
+
     // If active model not in list, add it so the input displays something
     if (activeModelId && !modelList.some(m => m.id === activeModelId)) {
       modelList = [{ id: activeModelId, name: activeModelId }, ...modelList];
@@ -2619,5 +2640,42 @@
     }
 
     return server;
+  }
+
+  // ===== Context Tracker =====
+
+  function updateContextTracker(data) {
+    const percentage = data.percentage || 0;
+    const totalTokens = data.totalTokens || 0;
+    const contextWindow = data.contextWindow || currentContextWindow || 0;
+
+    // Update fill bar
+    contextTrackerFill.style.width = percentage + '%';
+
+    // Color coding based on usage
+    if (percentage >= 80) {
+      contextTrackerFill.className = 'context-tracker-fill critical';
+    } else if (percentage >= 60) {
+      contextTrackerFill.className = 'context-tracker-fill warning';
+    } else {
+      contextTrackerFill.className = 'context-tracker-fill';
+    }
+
+    // Label: show compact format
+    if (contextWindow > 0) {
+      const usedK = (totalTokens / 1000).toFixed(0);
+      const totalK = (contextWindow / 1000).toFixed(0);
+      contextTrackerLabel.textContent = usedK + 'k/' + totalK + 'k';
+    } else {
+      contextTrackerLabel.textContent = totalTokens > 0 ? ((totalTokens / 1000).toFixed(0) + 'k') : '0%';
+    }
+
+    // Update tooltip
+    let tooltip = 'Context: ' + percentage + '% used';
+    if (contextWindow > 0) {
+      tooltip += ' (' + totalTokens.toLocaleString() + ' / ' + contextWindow.toLocaleString() + ' tokens)';
+    }
+    tooltip += '\\nClick to compact context';
+    contextTracker.title = tooltip;
   }
 })();

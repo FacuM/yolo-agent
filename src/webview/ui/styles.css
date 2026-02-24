@@ -1006,6 +1006,71 @@ body {
   white-space: nowrap;
 }
 
+/* Context Tracker */
+.context-tracker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 1px 6px;
+  height: 22px;
+  transition: all 0.15s;
+  color: var(--vscode-foreground);
+  font-size: 10px;
+}
+
+.context-tracker:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+  border-color: var(--vscode-focusBorder);
+}
+
+.context-tracker:active {
+  transform: scale(0.95);
+}
+
+.context-tracker-bar {
+  display: inline-block;
+  width: 40px;
+  height: 6px;
+  background: var(--vscode-progressBar-background, rgba(128, 128, 128, 0.2));
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.context-tracker-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--vscode-progressBar-background, #0e70c0);
+  border-radius: 3px;
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.context-tracker-fill.warning {
+  background: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.context-tracker-fill.critical {
+  background: var(--vscode-errorForeground, #f48771);
+  animation: context-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes context-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.context-tracker-label {
+  font-size: 10px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* Steering buttons - inline */
 .steering-btn {
   padding: 2px 8px;

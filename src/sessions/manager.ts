@@ -70,6 +70,8 @@ export interface Session {
   modelId: string | null;
   /** Smart To-Do plan state (null if not in smart-todo mode) */
   smartTodo: SmartTodoPlan | null;
+  /** Cumulative token usage for context tracking */
+  tokenUsage: { inputTokens: number; outputTokens: number };
 }
 
 export interface SessionSummary {
@@ -115,6 +117,7 @@ export class SessionManager {
       providerId,
       modelId,
       smartTodo: null,
+      tokenUsage: { inputTokens: 0, outputTokens: 0 },
     };
     this.sessions.set(session.id, session);
 
@@ -349,5 +352,40 @@ export class SessionManager {
     plan.clarificationQuestions = questions;
     plan.fileReferences = fileReferences;
     this.fireChange();
+  }
+
+  // ===== Token usage helpers =====
+
+  addTokenUsage(sessionId: string, inputTokens: number, outputTokens: number): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) { return; }
+    session.tokenUsage.inputTokens += inputTokens;
+    session.tokenUsage.outputTokens += outputTokens;
+  }
+
+  getTokenUsage(sessionId: string): { inputTokens: number; outputTokens: number } {
+    const session = this.sessions.get(sessionId);
+    return session?.tokenUsage ?? { inputTokens: 0, outputTokens: 0 };
+  }
+
+  resetTokenUsage(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) { return; }
+    session.tokenUsage = { inputTokens: 0, outputTokens: 0 };
+  }
+
+  /**
+   * Replace the session history with a compacted summary message.
+   * Preserves the conversation context in compressed form.
+   */
+  compactHistory(sessionId: string, summary: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) { return; }
+    // Replace all history with a single summary message
+    session.history = [
+      { role: 'user', content: '[Compacted conversation context]\n\n' + summary, internal: true },
+    ];
+    session.tokenUsage = { inputTokens: 0, outputTokens: 0 };
+    session.updatedAt = Date.now();
   }
 }
