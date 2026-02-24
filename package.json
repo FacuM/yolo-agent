@@ -16,7 +16,9 @@
     "AI",
     "Chat"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:yoloAgent.chatView"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {

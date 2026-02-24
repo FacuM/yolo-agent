@@ -118,7 +118,7 @@ Be thorough but concise. This summary will replace the full conversation history
 
   // ===== Instance fields =====
 
-  private view?: vscode.WebviewView;
+  public view?: vscode.WebviewView;
   private registry: ProviderRegistry;
   private profileManager: ProfileManager;
   private modeManager: ModeManager;
@@ -2100,6 +2100,13 @@ IMPORTANT RULES:
   }
 
   // --- MCP handlers ---
+
+  /** Called externally when MCP configs change to refresh the webview */
+  public refreshMcpTools(): void {
+    if (this.view) {
+      this.handleGetMcpServers();
+    }
+  }
 
   private handleGetMcpServers() {
     const servers = this.mcpConfigManager.getConfigs();

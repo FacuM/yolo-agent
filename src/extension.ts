@@ -91,8 +91,8 @@ export async function activate(
       }
     }
 
-    // Notify webview to refresh MCP tools
-    vscode.commands.executeCommand('yoloAgent.chatView.focus');
+    // Notify webview to refresh MCP tools (view may not be open yet)
+    chatViewProvider.refreshMcpTools?.();
   });
 
   // Initialize tools with sandbox awareness (optional sandboxManager)
@@ -155,7 +155,10 @@ export async function activate(
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('yoloAgent.newChat', () => {
-      vscode.commands.executeCommand('yoloAgent.chatView.focus');
+      // Show the sidebar view if it's already resolved
+      if (chatViewProvider.view) {
+        chatViewProvider.view.show?.(true);
+      }
     })
   );
 
