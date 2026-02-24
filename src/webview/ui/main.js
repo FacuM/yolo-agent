@@ -1938,6 +1938,10 @@
   }
 
   function handleMessageComplete() {
+    // Capture the plan text before resetting state (needed for plan card)
+    const completedText = currentAssistantText;
+    const completedEl = currentAssistantEl;
+
     isStreaming = false;
     updateStreamingUI();
     stopBtn.disabled = true;
@@ -1945,11 +1949,176 @@
     removeStreamingCursor();
     currentAssistantEl = null;
     currentAssistantText = '';
-    inputEl.focus();
     abortController = null;
+
+    // Only steal focus to inputEl if no plan card textarea is focused
+    if (!document.activeElement || !document.activeElement.classList.contains('plan-card-textarea')) {
+      inputEl.focus();
+    }
+
+    // If planning mode is active and we have assistant content, show editable plan card
+    // Only show if no plan card already exists adjacent to this message
+    if (planningCheckbox.checked && completedText && completedEl) {
+      // Check no plan card already exists for this message
+      let hasPlanCard = false;
+      let sib = completedEl.nextElementSibling;
+      while (sib) {
+        if (sib.classList.contains('plan-card')) { hasPlanCard = true; break; }
+        sib = sib.nextElementSibling;
+      }
+      if (!hasPlanCard) {
+        showPlanCard(completedText, completedEl);
+      }
+    }
 
     // Process queue if there are pending commands
     processQueue();
+  }
+
+  function showPlanCard(planText, assistantEl) {
+    // Hide the raw assistant message — the plan card replaces it visually
+    assistantEl.style.display = 'none';
+
+    // Collapse exploration tool-call cards that appeared between the assistant
+    // message and the end of the messages list (they were used during planning
+    // and are no longer the primary focus).
+    const toolCallsWrapper = document.createElement('details');
+    toolCallsWrapper.className = 'plan-exploration-details';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Show exploration steps';
+    toolCallsWrapper.appendChild(summary);
+    // Gather tool-call siblings after the hidden assistant message
+    const toolCards = [];
+    let sibling = assistantEl.nextSibling;
+    while (sibling) {
+      const next = sibling.nextSibling; // save before moving
+      if (sibling.nodeType === 1 && /** @type {Element} */ (sibling).classList.contains('tool-call')) {
+        toolCards.push(sibling);
+      }
+      sibling = next;
+    }
+    if (toolCards.length > 0) {
+      // Insert wrapper where the first tool card was
+      toolCards[0].parentNode.insertBefore(toolCallsWrapper, toolCards[0]);
+      toolCards.forEach(tc => toolCallsWrapper.appendChild(tc));
+    }
+
+    // Create plan card
+    const card = document.createElement('div');
+    card.className = 'plan-card';
+
+    const header = document.createElement('div');
+    header.className = 'plan-card-header';
+
+    const headerLeft = document.createElement('div');
+    headerLeft.className = 'plan-card-header-left';
+    headerLeft.textContent = '\u{1F4DD} Plan';
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'plan-card-edit-btn';
+    editBtn.textContent = '\u270E Edit';
+    editBtn.title = 'Edit the plan before proceeding';
+
+    header.appendChild(headerLeft);
+    header.appendChild(editBtn);
+
+    // Read-only view of the plan (default)
+    const preview = document.createElement('div');
+    preview.className = 'plan-card-preview';
+    renderMessageContent(preview, planText);
+
+    // Editable textarea (hidden by default)
+    const textarea = document.createElement('textarea');
+    textarea.className = 'plan-card-textarea hidden';
+    textarea.value = planText;
+    textarea.spellcheck = false;
+
+    // Auto-size the textarea when shown
+    function autoSize() {
+      textarea.style.height = 'auto';
+      textarea.style.height = textarea.scrollHeight + 'px';
+    }
+    textarea.addEventListener('input', autoSize);
+
+    // Prevent Enter from propagating (safety against any parent handlers)
+    textarea.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+    });
+
+    let isEditing = false;
+    editBtn.addEventListener('click', () => {
+      isEditing = !isEditing;
+      if (isEditing) {
+        preview.classList.add('hidden');
+        textarea.classList.remove('hidden');
+        editBtn.textContent = '\u2713 Done';
+        editBtn.title = 'Finish editing';
+        autoSize();
+        textarea.focus();
+      } else {
+        // Update the preview with edited text
+        renderMessageContent(preview, textarea.value);
+        preview.classList.remove('hidden');
+        textarea.classList.add('hidden');
+        editBtn.textContent = '\u270E Edit';
+        editBtn.title = 'Edit the plan before proceeding';
+      }
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'plan-card-actions';
+
+    const proceedBtn = document.createElement('button');
+    proceedBtn.className = 'plan-card-btn proceed';
+    proceedBtn.textContent = '\u25B6 Proceed with this plan';
+    proceedBtn.title = 'Turn off planning mode and implement the plan';
+    proceedBtn.addEventListener('click', () => {
+      const finalPlan = textarea.value;
+      proceedBtn.disabled = true;
+      editBtn.disabled = true;
+      proceedBtn.textContent = 'Implementing...';
+
+      // If still editing, close editor
+      if (isEditing) {
+        isEditing = false;
+        renderMessageContent(preview, finalPlan);
+        preview.classList.remove('hidden');
+        textarea.classList.add('hidden');
+        editBtn.textContent = '\u270E Edit';
+      }
+
+      // Remove empty state if visible
+      removeEmptyState();
+
+      // Trigger implementation: disables planning and sends plan to agent
+      vscode.postMessage({ type: 'proceedWithPlan', planText: finalPlan });
+
+      // Update local UI state for streaming
+      isStreaming = true;
+      updateStreamingUI();
+      stopBtn.disabled = false;
+      currentAssistantEl = appendMessage('assistant', '');
+      currentAssistantText = '';
+      addStreamingCursor(currentAssistantEl);
+    });
+
+    actions.appendChild(proceedBtn);
+
+    card.appendChild(header);
+    card.appendChild(preview);
+    card.appendChild(textarea);
+    card.appendChild(actions);
+
+    // Insert the plan card after the hidden assistant message (before collapsed tool calls)
+    if (assistantEl.nextSibling) {
+      messagesEl.insertBefore(card, assistantEl.nextSibling);
+    } else {
+      messagesEl.appendChild(card);
+    }
+    // Make sure the proceed button is visible
+    requestAnimationFrame(() => {
+      card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    });
   }
 
   function handleError(msg) {

@@ -774,6 +774,145 @@ body {
   background: var(--vscode-button-secondaryHoverBackground);
 }
 
+/* Collapsed exploration tool-calls during planning */
+.plan-exploration-details {
+  margin: 6px 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+.plan-exploration-details summary {
+  cursor: pointer;
+  padding: 4px 0;
+  opacity: 0.7;
+  user-select: none;
+}
+.plan-exploration-details summary:hover {
+  opacity: 1;
+}
+
+/* Plan editor card */
+.plan-card {
+  margin: 12px 0;
+  border-radius: 8px;
+  border: 2px solid var(--vscode-focusBorder);
+  background: var(--vscode-editor-background);
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.plan-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--vscode-editor-selectionBackground);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.plan-card-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plan-card-edit-btn {
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s;
+}
+
+.plan-card-edit-btn:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground);
+  border-color: var(--vscode-focusBorder);
+}
+
+.plan-card-edit-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.plan-card-preview {
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.plan-card-preview.hidden {
+  display: none;
+}
+
+.plan-card-textarea {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  max-height: 500px;
+  padding: 10px 12px;
+  border: none;
+  border-top: 1px solid var(--vscode-panel-border);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.plan-card-textarea.hidden {
+  display: none;
+}
+
+.plan-card-textarea:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+.plan-card-actions {
+  padding: 10px 12px;
+  display: flex;
+  gap: 8px;
+  border-top: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-editor-selectionBackground);
+}
+
+.plan-card-btn {
+  padding: 7px 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  transition: all 0.15s;
+}
+
+.plan-card-btn.proceed {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  flex: 1;
+  text-align: center;
+}
+
+.plan-card-btn.proceed:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.plan-card-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Stop button */
 .stop-btn {
   padding: 2px 8px;

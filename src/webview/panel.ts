@@ -229,6 +229,30 @@ Rules:
           this.planningMode = !!message.enabled;
           this.postMessage({ type: 'planningModeChanged', enabled: this.planningMode });
           break;
+        case 'proceedWithPlan':
+          {
+            // Disable planning mode and send the plan to the agent for implementation
+            this.planningMode = false;
+            this.postMessage({ type: 'planningModeChanged', enabled: false });
+            const planText = message.planText as string;
+            if (planText) {
+              const session = this.sessionManager.getOrCreateActiveSession(
+                this.registry.getActiveProviderId(),
+                this.registry.getActiveModelId()
+              );
+              const implementPrompt = `Implement the following plan. Follow it step by step, using the tools available to you. Do not ask for confirmation — just execute each step.\n\n---\n${planText}\n---`;
+              const implementSystemPrompt = `You are an expert software engineer. You have been given a plan to implement. Execute it step by step using the tools available to you.
+
+Rules:
+- Create or modify files exactly as described in the plan.
+- Run terminal commands when needed (e.g., to install dependencies or verify results).
+- Do NOT re-plan or ask for permission. Execute each step immediately.
+- After completing all steps, briefly summarize what was done.`;
+              // Call sendOneLLMRound directly with an implementation system prompt
+              await this.sendOneLLMRound(session.id, implementPrompt, undefined, implementSystemPrompt);
+            }
+          }
+          break;
         case 'exitPlanningModeDecision':
           {
             const exitTool = this.tools.get('exitPlanningMode');
@@ -403,6 +427,41 @@ Rules:
 
     // Auto-title from first user message
     this.sessionManager.updateTitleFromMessage(sessionId, text);
+
+    // --- Planning mode bypasses Smart To-Do ---
+    // When the user has the Plan checkbox active, always do a direct LLM round
+    // with a planning-focused system prompt, regardless of the current mode.
+    if (this.planningMode) {
+      this.cancelledSessions.delete(sessionId);
+      const planningPrompt = `You are a software engineering planner. Your ONLY job is to produce a detailed implementation plan — you must NOT write or modify any code.
+
+You SHOULD use the available tools to read files, list directories, and explore the codebase. This helps you write accurate plans that reference real file paths, existing code, and project structure.
+
+After gathering context, output your plan in the following structure:
+
+## Goal
+One-sentence summary of what will be implemented.
+
+## Steps
+For each step:
+- **File**: exact path to create or modify
+- **Change**: what to do (with code sketches when helpful)
+- **Why**: brief rationale
+
+## Risks & Edge Cases
+Anything to watch out for.
+
+## Verification
+How to confirm the implementation works.
+
+IMPORTANT RULES:
+- Do NOT attempt to create, write, or modify any files.
+- Do NOT say "I'll implement this now" or similar — you are ONLY planning.
+- Output ONLY the plan, no preamble or commentary before or after it.
+- Be specific: reference real file paths and existing code you found.`;
+      await this.sendOneLLMRound(sessionId, text, fileReferences, planningPrompt);
+      return;
+    }
 
     // --- Smart To-Do orchestration ---
     if (this.modeManager.isSmartTodoMode()) {
@@ -684,6 +743,9 @@ Rules:
           if (abortCtrl.signal.aborted) { break; }
 
           // ── Loop detection: catch identical calls, read-only spinning, AND error-retry cycling ──
+          // In planning mode, read-only exploration IS the desired behavior, so we
+          // skip the normal non-productive-round heuristic and only nudge on truly
+          // identical consecutive call batches (the LLM re-reading the same file).
           const READ_ONLY_TOOLS = new Set(['listFiles', 'readFile', 'getDiagnostics', 'getSandboxStatus']);
           const callSigs = response.toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`).join('|');
           recentToolCalls.push(callSigs);
@@ -709,7 +771,8 @@ Rules:
 
           // A round is "non-productive" if EVERY tool call either errored or is read-only.
           // This catches the cycling pattern: runSandboxedCommand(error) → listFiles(ok) → repeat
-          const allNonProductive = response.toolCalls.every((tc, i) =>
+          // NOTE: In planning mode this check is skipped — read-only is the only option.
+          const allNonProductive = this.planningMode ? false : response.toolCalls.every((tc, i) =>
             READ_ONLY_TOOLS.has(tc.name) || toolResults[i]?.isError
           );
           (recentToolCalls as any).nonProductiveStreak = allNonProductive
@@ -734,8 +797,12 @@ Rules:
 
             // After 2 nudges the LLM clearly isn't responding to guidance — force-break
             if (nudgesSent >= 2) {
-              const forceMsg = '[SYSTEM] Stopping tool loop: repeated non-productive iterations after multiple warnings. ' +
-                'Summarize what you have done so far and what still needs to be done.';
+              const forceMsg = this.planningMode
+                ? '[SYSTEM] Stopping tool loop: you have been re-reading the same files. ' +
+                  'Output your implementation plan NOW using the required format (## Goal, ## Steps, ## Risks & Edge Cases, ## Verification). ' +
+                  'Use the context you have already gathered.'
+                : '[SYSTEM] Stopping tool loop: repeated non-productive iterations after multiple warnings. ' +
+                  'Summarize what you have done so far and what still needs to be done.';
               messages.push({ role: 'user', content: forceMsg });
               this.sessionManager.addMessage(sessionId, { role: 'user', content: forceMsg });
 
@@ -749,20 +816,28 @@ Rules:
             }
 
             // Build a targeted nudge message
-            let nudgeBody = '[SYSTEM] You are spinning without making progress. ';
-            if (repeatedErrorTools.length > 0) {
-              const toolList = repeatedErrorTools.join(', ');
-              nudgeBody += `The following tool(s) have FAILED: ${toolList}. STOP using them and try alternatives. `;
-              if (repeatedErrorTools.includes('runSandboxedCommand')) {
-                nudgeBody += 'runSandboxedCommand requires createSandbox first — use runTerminal instead. ';
+            let nudgeBody: string;
+            if (this.planningMode) {
+              // Planning-mode nudge: the model is re-reading the same files
+              nudgeBody = '[SYSTEM] You are reading the same files repeatedly. ' +
+                'You have gathered enough context. ' +
+                'STOP using tools and OUTPUT your implementation plan NOW using the required format (## Goal, ## Steps, ## Risks & Edge Cases, ## Verification).';
+            } else {
+              nudgeBody = '[SYSTEM] You are spinning without making progress. ';
+              if (repeatedErrorTools.length > 0) {
+                const toolList = repeatedErrorTools.join(', ');
+                nudgeBody += `The following tool(s) have FAILED: ${toolList}. STOP using them and try alternatives. `;
+                if (repeatedErrorTools.includes('runSandboxedCommand')) {
+                  nudgeBody += 'runSandboxedCommand requires createSandbox first — use runTerminal instead. ';
+                }
               }
+              nudgeBody += 'STOP and ACT NOW:\n' +
+                '- Use writeFile to create source files\n' +
+                '- Use runTerminal to run shell commands (npm, npx, etc.)\n' +
+                '- Do NOT use runSandboxedCommand unless you have called createSandbox first\n' +
+                '- If a tool returned an error, STOP calling it and try an alternative tool\n' +
+                'Implement the next pending TODO item RIGHT NOW with writeFile or runTerminal.';
             }
-            nudgeBody += 'STOP and ACT NOW:\n' +
-              '- Use writeFile to create source files\n' +
-              '- Use runTerminal to run shell commands (npm, npx, etc.)\n' +
-              '- Do NOT use runSandboxedCommand unless you have called createSandbox first\n' +
-              '- If a tool returned an error, STOP calling it and try an alternative tool\n' +
-              'Implement the next pending TODO item RIGHT NOW with writeFile or runTerminal.';
 
             const nudge: ChatMessage = {
               role: 'user',
@@ -2063,7 +2138,7 @@ Rules:
         <div id="file-chips" class="file-chips hidden"></div>
         <div class="input-wrapper">
           <textarea id="message-input" placeholder="Ask YOLO Agent... (@ to reference files)" rows="1" data-autoresize></textarea>
-          <button id="send-btn" title="Send" disabled>\u27A4</button>
+          <button id="send-btn" title="Send">\u27A4</button>
         </div>
         <div id="autocomplete-dropdown" class="autocomplete-dropdown hidden"></div>
       </div>
