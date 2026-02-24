@@ -274,3 +274,212 @@ Examples of commands needing higher timeouts:
     });
   }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Background process tracking
+// ────────────────────────────────────────────────────────────────────────────
+
+interface BackgroundProcess {
+  id: number;
+  command: string;
+  pid: number | undefined;
+  startedAt: number;
+  /** Rolling buffer of the last N chars of combined stdout+stderr. */
+  output: string;
+  exitCode: number | null;
+  finished: boolean;
+  error?: string;
+}
+
+/** Max chars kept per background process output buffer. */
+const BG_OUTPUT_LIMIT = 50_000;
+
+/** Shared registry so both tools can access the same state. */
+const backgroundProcesses = new Map<number, BackgroundProcess>();
+let nextBgId = 1;
+
+// ────────────────────────────────────────────────────────────────────────────
+//  RunBackgroundTerminalTool
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Launches a shell command in the background and returns immediately.
+ * Ideal for long-running processes such as dev servers, watchers, or builds.
+ */
+export class RunBackgroundTerminalTool implements Tool {
+  private sandboxManager?: SandboxManager;
+
+  definition = {
+    name: 'runBackgroundTerminal',
+    description:
+      `Launch a shell command in the background and return immediately without waiting for it to finish.
+Use this for long-running processes that should stay alive while you continue working:
+- Dev servers (npm run dev, python -m http.server, etc.)
+- File watchers (tsc --watch, nodemon, etc.)
+- Build processes running in watch mode
+- Any command that is not expected to terminate quickly
+
+Returns a process ID you can later pass to getBackgroundTerminal to check output or status.
+The process is NOT subject to stall/timeout detection — it runs until it exits on its own or is explicitly checked.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: 'The shell command to run in the background',
+        },
+        cwd: {
+          type: 'string',
+          description: 'Optional working directory (relative to workspace root)',
+        },
+      },
+      required: ['command'],
+    },
+  };
+
+  constructor(sandboxManager?: SandboxManager) {
+    this.sandboxManager = sandboxManager;
+  }
+
+  async execute(params: Record<string, unknown>): Promise<ToolResult> {
+    const command = params.command as string;
+    const cwd = params.cwd as string | undefined;
+
+    // Sandbox validation
+    if (this.sandboxManager) {
+      const check = this.sandboxManager.isCommandAllowed(command);
+      if (!check.allowed) {
+        return { content: `Command blocked: ${check.reason}`, isError: true };
+      }
+    }
+
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+
+    let effectiveCwd: string | undefined;
+    if (this.sandboxManager) {
+      const info = this.sandboxManager.getSandboxInfo();
+      if (info.isActive && info.config) {
+        effectiveCwd = cwd
+          ? path.resolve(info.config.worktreePath, toRelativeCwd(cwd, info.config.originalPath))
+          : info.config.worktreePath;
+      }
+    }
+    if (!effectiveCwd) {
+      effectiveCwd = cwd
+        ? vscode.Uri.joinPath(workspaceFolder?.uri ?? vscode.Uri.file('/'), cwd).fsPath
+        : workspaceFolder?.uri.fsPath;
+    }
+
+    try {
+      const id = nextBgId++;
+      const proc = spawn('sh', ['-c', command], {
+        cwd: effectiveCwd || undefined,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true, // run in its own process group
+        env: {
+          ...process.env,
+          FORCE_COLOR: '0',
+          NO_COLOR: '1',
+          TERM: 'dumb',
+        },
+      });
+
+      // Allow the parent Node process to exit even if this child is still running
+      proc.unref();
+
+      const entry: BackgroundProcess = {
+        id,
+        command,
+        pid: proc.pid,
+        startedAt: Date.now(),
+        output: '',
+        exitCode: null,
+        finished: false,
+      };
+      backgroundProcesses.set(id, entry);
+
+      const appendOutput = (chunk: string) => {
+        entry.output += stripAnsi(chunk);
+        if (entry.output.length > BG_OUTPUT_LIMIT) {
+          entry.output = entry.output.slice(entry.output.length - BG_OUTPUT_LIMIT);
+        }
+      };
+
+      proc.stdout?.on('data', (data: Buffer) => appendOutput(data.toString()));
+      proc.stderr?.on('data', (data: Buffer) => appendOutput(data.toString()));
+
+      proc.on('close', (code) => {
+        entry.exitCode = code;
+        entry.finished = true;
+      });
+
+      proc.on('error', (err) => {
+        entry.error = err.message;
+        entry.finished = true;
+      });
+
+      return {
+        content: `Background process started (id=${id}, pid=${proc.pid ?? 'unknown'}).\nCommand: ${command}\nUse getBackgroundTerminal with id=${id} to check output and status later.`,
+      };
+    } catch (err) {
+      return {
+        content: `Failed to start background command: ${err instanceof Error ? err.message : String(err)}`,
+        isError: true,
+      };
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  GetBackgroundTerminalTool
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Retrieve the current output and status of a background process launched
+ * by runBackgroundTerminal.
+ */
+export class GetBackgroundTerminalTool implements Tool {
+  definition = {
+    name: 'getBackgroundTerminal',
+    description:
+      `Check the output and status of a background process started with runBackgroundTerminal.
+Pass the process id returned when the command was launched.
+Returns the accumulated output buffer plus whether the process is still running.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'number',
+          description: 'The background process id returned by runBackgroundTerminal',
+        },
+      },
+      required: ['id'],
+    },
+  };
+
+  async execute(params: Record<string, unknown>): Promise<ToolResult> {
+    const id = params.id as number;
+    const entry = backgroundProcesses.get(id);
+
+    if (!entry) {
+      const knownIds = [...backgroundProcesses.keys()];
+      return {
+        content: knownIds.length
+          ? `No background process with id=${id}. Active ids: ${knownIds.join(', ')}`
+          : 'No background processes have been started yet.',
+        isError: true,
+      };
+    }
+
+    const elapsed = ((Date.now() - entry.startedAt) / 1000).toFixed(1);
+    const status = entry.finished
+      ? `Finished (exit code ${entry.exitCode ?? 'unknown'}${entry.error ? `, error: ${entry.error}` : ''})`
+      : 'Running';
+
+    const output = truncateOutput(entry.output) || '(no output yet)';
+
+    return {
+      content: `Background process id=${id}\nCommand: ${entry.command}\nPID: ${entry.pid ?? 'unknown'}\nStatus: ${status}\nElapsed: ${elapsed}s\n\n--- output ---\n${output}`,
+    };
+  }
+}
