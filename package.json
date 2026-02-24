@@ -4,6 +4,10 @@
   "description": "A coding agent for VS Code powered by multiple AI providers",
   "version": "0.0.1",
   "publisher": "yolo-agent",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FacuM/yolo-agent.git"
+  },
   "engines": {
     "vscode": "^1.96.0"
   },
