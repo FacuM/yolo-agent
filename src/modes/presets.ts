@@ -1,6 +1,6 @@
 import { Mode, ModeId, BuiltinMode } from './types';
 
-export const BUILT_IN_MODES: Record<'sandboxed-smart-todo' | 'smart-todo' | 'sandbox' | 'agent' | 'ask' | 'plan', BuiltinMode> = {
+export const BUILT_IN_MODES: Record<'sandboxed-smart-todo' | 'smart-todo' | 'sandbox' | 'agent' | 'ask', BuiltinMode> = {
   'sandboxed-smart-todo': {
     id: 'sandboxed-smart-todo' as const,
     name: 'Sandboxed Smart To-Do',
@@ -119,22 +119,6 @@ export const BUILT_IN_MODES: Record<'sandboxed-smart-todo' | 'smart-todo' | 'san
     isBuiltIn: true,
   },
 
-  plan: {
-    id: 'plan' as const,
-    name: 'Plan',
-    description: 'Read-only access - can view but not modify',
-    systemPrompt: 'You are a planning assistant. You can read files and explore the codebase, but cannot make changes. Help the user plan their work.',
-    toolPermissions: {
-      readFile: 'allow',
-      writeFile: 'deny',
-      listFiles: 'allow',
-      runTerminal: 'deny',
-      runBackgroundTerminal: 'deny',
-      getBackgroundTerminal: 'deny',
-      getDiagnostics: 'allow',
-    },
-    isBuiltIn: true,
-  },
 
 };
 
