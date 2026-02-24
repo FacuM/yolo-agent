@@ -132,7 +132,7 @@ export class ContextScanner {
         content: markdownContent,
         sourcePath: uri.fsPath,
         tags,
-        enabled: true, // Auto-enable all skills by default
+        enabled: true, // Skills are enabled by default; content injected on keyword match
       };
 
       this.skills.set(uri.fsPath, skill);

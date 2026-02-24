@@ -90,36 +90,125 @@ export class ContextManager {
   }
 
   /**
-   * Get the system prompt addition with all enabled context
+   * Maximum characters allowed for the context addition injected into the system prompt.
+   * ~100K chars ≈ ~25K tokens — leaves plenty of room for the base system prompt,
+   * tool definitions, and conversation history.
    */
-  getSystemPromptAddition(): string {
+  private static readonly MAX_CONTEXT_CHARS = 100_000;
+
+  /**
+   * Maximum characters for a single skill / AGENTS.md file.
+   */
+  private static readonly MAX_SINGLE_FILE_CHARS = 30_000;
+
+  /**
+   * Extract trigger phrases from a skill description.
+   * Looks for quoted strings like "create an agent", "add a hook", etc.
+   * Also splits on commas to catch keyword lists.
+   */
+  private static extractTriggers(description: string): string[] {
+    const triggers: string[] = [];
+
+    // Extract quoted phrases: "create an agent", 'add a hook'
+    const quotedRegex = /["']([^"']{3,})["']/g;
+    let match;
+    while ((match = quotedRegex.exec(description)) !== null) {
+      triggers.push(match[1].toLowerCase().trim());
+    }
+
+    // If no quoted phrases, fall back to splitting the first sentence by commas
+    // and using significant words (3+ chars)
+    if (triggers.length === 0 && description) {
+      const firstSentence = description.split('.')[0];
+      const words = firstSentence
+        .toLowerCase()
+        .split(/[,;|]+/)
+        .map(w => w.trim())
+        .filter(w => w.length >= 4);
+      triggers.push(...words);
+    }
+
+    return triggers;
+  }
+
+  /**
+   * Check if a user message matches any triggers for a skill.
+   */
+  private static matchesTriggers(userMessage: string, triggers: string[]): boolean {
+    if (triggers.length === 0) { return false; }
+    const lowerMessage = userMessage.toLowerCase();
+    return triggers.some(trigger => lowerMessage.includes(trigger));
+  }
+
+  /**
+   * Get the system prompt addition with context.
+   * Skills whose trigger keywords match the user message get their full content injected.
+   * All other enabled skills appear as a lightweight name + description index.
+   *
+   * @param userMessage — The current user message (used for keyword matching)
+   */
+  getSystemPromptAddition(userMessage?: string): string {
     const enabledSkills = this.getEnabledSkills();
     const agentsMdFiles = this.getAgentsMdFiles();
 
     const parts: string[] = [];
+    let totalChars = 0;
 
-    // Add skills section
-    if (enabledSkills.length > 0) {
-      parts.push('## Available Skills\n');
-      for (const skill of enabledSkills) {
-        parts.push(`### ${skill.name}`);
-        if (skill.description) {
-          parts.push(skill.description);
+    const addPart = (text: string): boolean => {
+      if (totalChars + text.length > ContextManager.MAX_CONTEXT_CHARS) {
+        return false; // budget exhausted
+      }
+      parts.push(text);
+      totalChars += text.length;
+      return true;
+    };
+
+    // Partition skills into triggered (full content) vs. indexed (summary only)
+    const triggeredSkills: Skill[] = [];
+    const indexedSkills: Skill[] = [];
+
+    for (const skill of enabledSkills) {
+      if (userMessage) {
+        const triggers = ContextManager.extractTriggers(skill.description);
+        // Also match skill name itself
+        const nameMatch = userMessage.toLowerCase().includes(skill.name.toLowerCase());
+        if (nameMatch || ContextManager.matchesTriggers(userMessage, triggers)) {
+          triggeredSkills.push(skill);
+          continue;
         }
-        if (skill.content) {
-          parts.push(skill.content);
-        }
-        parts.push('');
+      }
+      indexedSkills.push(skill);
+    }
+
+    // Inject full content for triggered skills
+    if (triggeredSkills.length > 0) {
+      addPart('## Active Skills (matched by your message)\n');
+      for (const skill of triggeredSkills) {
+        const header = `### ${skill.name}`;
+        const desc = skill.description ? `\n${skill.description}` : '';
+        const content = skill.content
+          ? `\n${skill.content.slice(0, ContextManager.MAX_SINGLE_FILE_CHARS)}`
+          : '';
+        if (!addPart(header + desc + content + '\n')) { break; }
       }
     }
 
-    // Add AGENTS.md section
+    // Lightweight index for all other enabled skills
+    if (indexedSkills.length > 0) {
+      addPart('\n## Available Skills (mention by name or keyword to activate)\n');
+      for (const skill of indexedSkills) {
+        const line = `- **${skill.name}**: ${skill.description || '(no description)'}`;
+        if (!addPart(line + '\n')) { break; }
+      }
+    }
+
+    // Add AGENTS.md section with per-file size cap
     if (agentsMdFiles.length > 0) {
-      parts.push('## Project Context (AGENTS.md & Rules)\n');
+      addPart('\n## Project Context (AGENTS.md & Rules)\n');
       for (const agentsMd of agentsMdFiles) {
-        parts.push(`### ${agentsMd.projectName}`);
-        parts.push(agentsMd.content);
-        parts.push('');
+        const truncatedContent = agentsMd.content.slice(0, ContextManager.MAX_SINGLE_FILE_CHARS);
+        const header = `### ${agentsMd.projectName}`;
+        if (!addPart(header + '\n' + truncatedContent + '\n')) { break; }
       }
     }
 

@@ -599,7 +599,8 @@ IMPORTANT RULES:
     let modePrompt = systemPromptOverride ?? this.modeManager.getSystemPrompt();
 
     // Add context from skills and context files (AGENTS.md, .github/*.md, .*/rules/*.md)
-    const contextAddition = this.contextManager.getSystemPromptAddition();
+    // Pass the user message so skill trigger keywords can be matched
+    const contextAddition = this.contextManager.getSystemPromptAddition(userText);
     if (contextAddition) {
       modePrompt += '\n\n' + contextAddition;
     }
