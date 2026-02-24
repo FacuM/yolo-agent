@@ -1299,13 +1299,13 @@ IMPORTANT RULES:
         : `Some TODOs are still incomplete. Please fix the following items:\n\n${pendingItems}\n\nOriginal request: ${userText}`;
 
       // Snapshot of files before execution to detect if anything was actually written
-      const filesBefore = new Set<string>();
+      const filesBefore = new Map<string, number>();
       try {
         const listTool = this.tools.get('listFiles');
         if (listTool) {
           const listing = await listTool.execute({ pattern: '**/*' });
           if (!listing.isError) {
-            listing.content.split('\n').filter(f => f.trim()).forEach(f => filesBefore.add(f));
+            listing.content.split('\n').filter(f => f.trim()).forEach(f => filesBefore.set(f, 0));
           }
         }
       } catch { /* ignore */ }
@@ -1324,6 +1324,8 @@ IMPORTANT RULES:
       }
 
       // Check if execution was productive: compare files after execution
+      // Consider productive if: new files appeared, file count changed, or
+      // the execution response contains evidence of work (tool calls / terminal output)
       let executionProductive = false;
       try {
         const listTool = this.tools.get('listFiles');
@@ -1337,15 +1339,58 @@ IMPORTANT RULES:
         }
       } catch { /* treat as non-productive if we can't check */ }
 
+      // Also consider productive if the LLM response references completed work
+      // (tool calls that ran terminal commands or wrote files count as progress)
+      if (!executionProductive && execResult && execResult !== '[CANCELLED]' && !execResult.startsWith('[ERROR]')) {
+        // The round made tool calls — check if any were write/terminal operations
+        const history = this.sessionManager.getHistory(sessionId);
+        const recentMessages = history.slice(-10);
+        const hadWriteOps = recentMessages.some(m =>
+          m.toolCalls?.some(tc =>
+            ['writeFile', 'runTerminal', 'runSandboxedCommand'].includes(tc.name)
+          )
+        );
+        if (hadWriteOps) {
+          executionProductive = true;
+        }
+      }
+
       if (executionProductive) {
         consecutiveNonProductiveRounds = 0;
       } else {
         consecutiveNonProductiveRounds++;
         if (consecutiveNonProductiveRounds >= 2) {
+          // Before giving up, check if the remaining TODOs are actually just verification-type tasks
+          const remainingTodos = todos.filter(t => t.status !== 'done');
+          const allVerificationLike = remainingTodos.every(t =>
+            /verif|test|confirm|check|run.*server|start.*server|open.*browser/i.test(t.title + ' ' + (t.detail || ''))
+          );
+
+          if (allVerificationLike) {
+            // Verification-style TODOs that don't produce files — mark as done and stop
+            for (const todo of remainingTodos) {
+              todo.status = 'done';
+              this.sessionManager.updateSmartTodoItem(sessionId, todo.id, 'done');
+            }
+            this.postSessionMessage(sessionId, {
+              type: 'streamChunk',
+              content: '\n\n\u2705 **Remaining verification tasks completed (no file changes needed).**\n',
+            });
+            this.postSessionMessage(sessionId, {
+              type: 'smartTodoUpdate',
+              phase: 'executing',
+              todos: this.sessionManager.getSmartTodo(sessionId)?.todos ?? [],
+              iteration,
+            });
+            await this.sendSandboxResult(sessionId);
+            this.postSessionMessage(sessionId, { type: 'messageComplete' });
+            break;
+          }
+
           this.postSessionMessage(sessionId, {
             type: 'streamChunk',
-            content: '\n\n\u26A0\uFE0F **Agent failed to produce files after 2 consecutive execution rounds. Stopping plan loop.**\n' +
-              'The model may not be capable of completing this task. Try a different model or break the request into simpler steps.\n',
+            content: '\n\n\u26A0\uFE0F **Agent could not make further progress after 2 consecutive execution rounds.**\n' +
+              'Try a different model, simplify the request, or complete the remaining steps manually.\n',
           });
           await this.sendSandboxResult(sessionId);
           this.postSessionMessage(sessionId, { type: 'messageComplete' });
@@ -1461,8 +1506,22 @@ IMPORTANT RULES:
         break;
       }
 
-      // Loop back to execution
+      // Loop back to execution — reset failed/in-progress TODOs to pending
+      // so the next execution round knows what to retry
+      for (const todo of todos) {
+        if (todo.status === 'failed' || todo.status === 'in-progress') {
+          todo.status = 'pending';
+          this.sessionManager.updateSmartTodoItem(sessionId, todo.id, 'pending');
+        }
+      }
       this.sessionManager.setSmartTodoPhase(sessionId, 'executing');
+
+      this.postSessionMessage(sessionId, {
+        type: 'smartTodoUpdate',
+        phase: 'executing',
+        todos: this.sessionManager.getSmartTodo(sessionId)?.todos ?? [],
+        iteration,
+      });
     }
   }
 
@@ -1539,6 +1598,58 @@ IMPORTANT RULES:
       const detail = dashIndex >= 0 ? fullText.slice(dashIndex).replace(/^[\s—\-–:]+/, '').trim() : undefined;
 
       todos.push({ id: bulletId++, title: title.slice(0, 80), status: 'pending', detail });
+    }
+
+    if (todos.length > 0) { return todos; }
+
+    // Strategy 4: "## Steps" with "- **File:** ..." pattern (planning mode output)
+    const stepsMatch = text.match(/##\s*Steps\s*\n([\s\S]*?)(?=##|$)/);
+    if (stepsMatch) {
+      const stepsText = stepsMatch[1];
+      // Look for step blocks starting with numbered items or "- **File:**"
+      const stepBlocks = stepsText.split(/(?=^\s*(?:\d+[.)\s]|-\s*\*\*File\*\*:))/m).filter(b => b.trim());
+      let stepId = 1;
+      for (const block of stepBlocks) {
+        // Try to extract title from "- **File:** path" or "N. description"
+        const fileMatch = block.match(/\*\*File\*\*:\s*(.+)/i);
+        const changeMatch = block.match(/\*\*Change\*\*:\s*(.+)/i);
+        const numberedMatch = block.match(/^\s*(\d+)[.)\s]+(.+)/m);
+
+        let title: string;
+        let detail: string | undefined;
+
+        if (fileMatch && changeMatch) {
+          title = `${changeMatch[1].trim().slice(0, 50)} (${fileMatch[1].trim()})`;
+          detail = block.trim();
+        } else if (numberedMatch) {
+          title = numberedMatch[2].replace(/\*\*/g, '').trim().slice(0, 80);
+          detail = block.trim();
+        } else {
+          const firstLine = block.trim().split('\n')[0].replace(/^[-*]\s*/, '').replace(/\*\*/g, '').trim();
+          if (firstLine.length < 5) { continue; }
+          title = firstLine.slice(0, 80);
+          detail = block.trim();
+        }
+
+        todos.push({ id: stepId++, title, status: 'pending', detail });
+      }
+    }
+
+    // Strategy 5: "## Goal" section as a single TODO if nothing else matched
+    if (todos.length === 0) {
+      const goalMatch = text.match(/##\s*Goal\s*\n+(.+)/i);
+      if (goalMatch) {
+        todos.push({ id: 1, title: goalMatch[1].trim().slice(0, 80), status: 'pending', detail: text.trim() });
+      }
+    }
+
+    // Strategy 6: "## Verification" section as an additional verification TODO
+    if (todos.length > 0) {
+      const verifyMatch = text.match(/##\s*Verification\s*\n+([\s\S]*?)(?=##|$)/);
+      if (verifyMatch) {
+        const nextId = Math.max(...todos.map(t => t.id)) + 1;
+        todos.push({ id: nextId, title: 'Verify implementation', status: 'pending', detail: verifyMatch[1].trim() });
+      }
     }
 
     return todos;
