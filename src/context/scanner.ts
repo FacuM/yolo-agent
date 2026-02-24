@@ -91,10 +91,10 @@ export class ContextScanner {
 
     // Define multiple skill directory patterns to check
     const skillsPatterns = [
-      new vscode.RelativePattern(this.workspaceFolder, '**/.yolo-agent/skills/*.md'),
-      new vscode.RelativePattern(this.workspaceFolder, '**/.kilo/skills/*.md'),
-      new vscode.RelativePattern(this.workspaceFolder, '**/.claude/skills/*.md'),
-      new vscode.RelativePattern(this.workspaceFolder, '**/.cline/skills/*.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.yolo-agent/skills/**/*.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.kilo/skills/**/*.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.claude/skills/**/*.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.cline/skills/**/*.md'),
     ];
 
     // Clear existing skills
@@ -220,10 +220,10 @@ export class ContextScanner {
 
     // Watch for changes to skill files in all supported directories
     const skillsPatterns = [
-      '**/.yolo-agent/skills/*.md',
-      '**/.kilo/skills/*.md',
-      '**/.claude/skills/*.md',
-      '**/.cline/skills/*.md',
+      '**/.yolo-agent/skills/**/*.md',
+      '**/.kilo/skills/**/*.md',
+      '**/.claude/skills/**/*.md',
+      '**/.cline/skills/**/*.md',
     ];
 
     for (const pattern of skillsPatterns) {
