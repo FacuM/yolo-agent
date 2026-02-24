@@ -1558,9 +1558,10 @@ IMPORTANT RULES:
     const planBlockMatch = response.match(/```plan\s*\n([\s\S]*?)```/);
     const text = planBlockMatch ? planBlockMatch[1] : response;
 
-    // Strategy 1: "TODO N: Title — Description"
-    const todoRegex = /TODO\s*(\d+)\s*:\s*(.+)/gi;
     let match: RegExpExecArray | null;
+
+    // ── Strategy 1: "TODO N: Title — Description" (canonical format) ──
+    const todoRegex = /TODO\s*(\d+)\s*:\s*(.+)/gi;
     while ((match = todoRegex.exec(text)) !== null) {
       const id = parseInt(match[1], 10);
       const fullText = match[2].trim();
@@ -1573,7 +1574,95 @@ IMPORTANT RULES:
 
     if (todos.length > 0) { return todos; }
 
-    // Strategy 2: numbered list "1. Title" or "1) Title" — common LLM fallback
+    // ── Strategy 2: Structured "## Steps" / "## Goal" format ──────────
+    // Many LLMs produce plans with markdown headers instead of ```plan blocks.
+    // Check this BEFORE generic numbered/bullet lists to avoid picking up sub-step numbers.
+    const hasStructuredFormat = /^##\s*(Goal|Steps|Verification)/mi.test(text);
+    if (hasStructuredFormat) {
+      // Extract file-change groups from "## Steps" section.
+      // Each group is a "- File: ..." block (with or without bold markers).
+      const stepsMatch = text.match(/##\s*Steps\s*\n([\s\S]*?)(?=\n##|$)/);
+      if (stepsMatch) {
+        const stepsText = stepsMatch[1];
+
+        // Split on "- File:" or "- **File**:" lines (each starts a new TODO).
+        // Accept both bold (**File**:) and plain (File:) formats.
+        const fileGroups = stepsText.split(/(?=^\s*-\s*(?:\*\*)?File(?:\*\*)?:\s)/m).filter(b => b.trim());
+
+        if (fileGroups.length > 0 && /^\s*-\s*(?:\*\*)?File(?:\*\*)?:/m.test(fileGroups[0])) {
+          // Each group starts with "- File: <path>" — treat as one TODO per file
+          let stepId = 1;
+          for (const group of fileGroups) {
+            const fileMatch = group.match(/(?:\*\*)?File(?:\*\*)?:\s*`?([^`\n]+)`?/i);
+            const changeMatch = group.match(/(?:\*\*)?Change(?:\*\*)?:\s*\n?([\s\S]*?)(?=\n\s*-\s*(?:(?:\*\*)?(?:File|Why|Reason)(?:\*\*)?:)|$)/i);
+
+            const filePath = fileMatch ? fileMatch[1].trim() : '';
+            let changeDesc = '';
+
+            if (changeMatch) {
+              // Summarize the change: take first meaningful line or first numbered sub-step
+              const changeLines = changeMatch[1].split('\n').map(l => l.trim()).filter(l => l.length > 3);
+              const firstStep = changeLines.find(l => /^\d+[.)]\s/.test(l));
+              if (firstStep) {
+                changeDesc = firstStep.replace(/^\d+[.)]\s*/, '').replace(/\*\*/g, '').trim();
+                // Count sub-steps to show scope
+                const subStepCount = changeLines.filter(l => /^\d+[.)]\s/.test(l)).length;
+                if (subStepCount > 1) {
+                  changeDesc += ` (+${subStepCount - 1} more change${subStepCount > 2 ? 's' : ''})`;
+                }
+              } else if (changeLines.length > 0) {
+                changeDesc = changeLines[0].replace(/^[-*]\s*/, '').replace(/\*\*/g, '').trim();
+              }
+            }
+
+            const title = filePath
+              ? `${changeDesc ? changeDesc.slice(0, 50) : 'Update'} (${filePath})`
+              : (changeDesc || group.trim().split('\n')[0].replace(/^[-*]\s*/, '').trim()).slice(0, 80);
+
+            todos.push({ id: stepId++, title: title.slice(0, 80), status: 'pending', detail: group.trim() });
+          }
+        } else {
+          // No "- File:" groups found — try numbered or bullet items within ## Steps
+          const numberedStepRegex = /^\s*(\d+)[.)\]]\s+(.+)/gm;
+          let stepId = 1;
+          while ((match = numberedStepRegex.exec(stepsText)) !== null) {
+            const fullText = match[2].replace(/\*\*/g, '').trim();
+            if (fullText.length < 5) { continue; }
+            todos.push({ id: stepId++, title: fullText.slice(0, 80), status: 'pending', detail: fullText });
+          }
+          if (todos.length === 0) {
+            // Try bullet items
+            const bulletStepRegex = /^\s*[-*]\s+(.+)/gm;
+            while ((match = bulletStepRegex.exec(stepsText)) !== null) {
+              const fullText = match[1].replace(/\*\*/g, '').trim();
+              if (fullText.length < 5) { continue; }
+              todos.push({ id: stepId++, title: fullText.slice(0, 80), status: 'pending', detail: fullText });
+            }
+          }
+        }
+      }
+
+      // If no Steps section matched, fall back to "## Goal" as a single TODO
+      if (todos.length === 0) {
+        const goalMatch = text.match(/##\s*Goal\s*\n+(.+)/i);
+        if (goalMatch) {
+          todos.push({ id: 1, title: goalMatch[1].trim().slice(0, 80), status: 'pending', detail: text.trim() });
+        }
+      }
+
+      // Append a verification TODO from "## Verification" section if present
+      if (todos.length > 0) {
+        const verifyMatch = text.match(/##\s*Verification\s*\n+([\s\S]*?)(?=\n##|$)/);
+        if (verifyMatch) {
+          const nextId = Math.max(...todos.map(t => t.id)) + 1;
+          todos.push({ id: nextId, title: 'Verify implementation', status: 'pending', detail: verifyMatch[1].trim() });
+        }
+      }
+
+      if (todos.length > 0) { return todos; }
+    }
+
+    // ── Strategy 3: Numbered list "1. Title" or "1) Title" (generic fallback) ──
     const numberedRegex = /^\s*(?:\*\*)?\s*(\d+)[.)\]]\s*(.+)/gm;
     while ((match = numberedRegex.exec(text)) !== null) {
       const id = parseInt(match[1], 10);
@@ -1587,7 +1676,7 @@ IMPORTANT RULES:
 
     if (todos.length > 0) { return todos; }
 
-    // Strategy 3: bullet list "- Title" or "* Title"
+    // ── Strategy 4: Bullet list "- Title" or "* Title" ──
     const bulletRegex = /^\s*[-*]\s+(.+)/gm;
     let bulletId = 1;
     while ((match = bulletRegex.exec(text)) !== null) {
@@ -1598,58 +1687,6 @@ IMPORTANT RULES:
       const detail = dashIndex >= 0 ? fullText.slice(dashIndex).replace(/^[\s—\-–:]+/, '').trim() : undefined;
 
       todos.push({ id: bulletId++, title: title.slice(0, 80), status: 'pending', detail });
-    }
-
-    if (todos.length > 0) { return todos; }
-
-    // Strategy 4: "## Steps" with "- **File:** ..." pattern (planning mode output)
-    const stepsMatch = text.match(/##\s*Steps\s*\n([\s\S]*?)(?=##|$)/);
-    if (stepsMatch) {
-      const stepsText = stepsMatch[1];
-      // Look for step blocks starting with numbered items or "- **File:**"
-      const stepBlocks = stepsText.split(/(?=^\s*(?:\d+[.)\s]|-\s*\*\*File\*\*:))/m).filter(b => b.trim());
-      let stepId = 1;
-      for (const block of stepBlocks) {
-        // Try to extract title from "- **File:** path" or "N. description"
-        const fileMatch = block.match(/\*\*File\*\*:\s*(.+)/i);
-        const changeMatch = block.match(/\*\*Change\*\*:\s*(.+)/i);
-        const numberedMatch = block.match(/^\s*(\d+)[.)\s]+(.+)/m);
-
-        let title: string;
-        let detail: string | undefined;
-
-        if (fileMatch && changeMatch) {
-          title = `${changeMatch[1].trim().slice(0, 50)} (${fileMatch[1].trim()})`;
-          detail = block.trim();
-        } else if (numberedMatch) {
-          title = numberedMatch[2].replace(/\*\*/g, '').trim().slice(0, 80);
-          detail = block.trim();
-        } else {
-          const firstLine = block.trim().split('\n')[0].replace(/^[-*]\s*/, '').replace(/\*\*/g, '').trim();
-          if (firstLine.length < 5) { continue; }
-          title = firstLine.slice(0, 80);
-          detail = block.trim();
-        }
-
-        todos.push({ id: stepId++, title, status: 'pending', detail });
-      }
-    }
-
-    // Strategy 5: "## Goal" section as a single TODO if nothing else matched
-    if (todos.length === 0) {
-      const goalMatch = text.match(/##\s*Goal\s*\n+(.+)/i);
-      if (goalMatch) {
-        todos.push({ id: 1, title: goalMatch[1].trim().slice(0, 80), status: 'pending', detail: text.trim() });
-      }
-    }
-
-    // Strategy 6: "## Verification" section as an additional verification TODO
-    if (todos.length > 0) {
-      const verifyMatch = text.match(/##\s*Verification\s*\n+([\s\S]*?)(?=##|$)/);
-      if (verifyMatch) {
-        const nextId = Math.max(...todos.map(t => t.id)) + 1;
-        todos.push({ id: nextId, title: 'Verify implementation', status: 'pending', detail: verifyMatch[1].trim() });
-      }
     }
 
     return todos;
