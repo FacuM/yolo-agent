@@ -7,6 +7,7 @@ import { ReadFileTool, WriteFileTool, ListFilesTool } from './tools/file-ops';
 import { RunTerminalTool } from './tools/terminal';
 import { GetDiagnosticsTool } from './tools/diagnostics';
 import { AskQuestionTool } from './tools/question';
+import { ExitPlanningModeTool } from './tools/planning';
 import {
   CreateSandboxTool,
   SwitchModeTool,
@@ -103,6 +104,7 @@ export async function activate(
     new RunTerminalTool(sandboxManager),
     new GetDiagnosticsTool(),
     new AskQuestionTool(),
+    new ExitPlanningModeTool(),
   ];
 
   // Add sandbox tools only if sandbox manager is available

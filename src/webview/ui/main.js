@@ -64,6 +64,10 @@
   const fileChips = document.getElementById('file-chips');
   const autocompleteDropdown = document.getElementById('autocomplete-dropdown');
 
+  // ===== Planning Mode Elements =====
+  const planningCheckbox = /** @type {HTMLInputElement} */ (document.getElementById('planning-checkbox'));
+  const planningToggle = document.getElementById('planning-toggle');
+
   // ===== Sandbox Activity Elements =====
   const sandboxActivity = document.getElementById('sandbox-activity');
   const sandboxBranchName = document.getElementById('sandbox-branch-name');
@@ -212,6 +216,13 @@
 
   providerSelect.addEventListener('change', () => {
     vscode.postMessage({ type: 'switchProvider', providerId: providerSelect.value });
+  });
+
+  // Planning mode checkbox
+  planningCheckbox.addEventListener('change', () => {
+    const enabled = planningCheckbox.checked;
+    planningToggle.classList.toggle('enabled', enabled);
+    vscode.postMessage({ type: 'togglePlanningMode', enabled });
   });
 
   // ── Model picker autocomplete logic ──
@@ -586,6 +597,13 @@
       case 'modeChanged':
         currentModeId = message.mode.id;
         updateModeSelector();
+        break;
+      case 'planningModeChanged':
+        planningCheckbox.checked = !!message.enabled;
+        planningToggle.classList.toggle('enabled', !!message.enabled);
+        break;
+      case 'exitPlanningModeRequest':
+        handleExitPlanningModeRequest(message.reason, message.toolCallId);
         break;
       case 'waitingForApi':
         apiSpinner.classList.remove('hidden');
@@ -1660,6 +1678,52 @@
     inputEl.placeholder = savedPlaceholder || 'Ask YOLO Agent... (@ to reference files)';
     updateStreamingUI();
     stopBtn.disabled = false;
+  }
+
+  function handleExitPlanningModeRequest(reason, toolCallId) {
+    const card = document.createElement('div');
+    card.className = 'exit-planning-card';
+    if (toolCallId) { card.dataset.toolId = toolCallId; }
+
+    const header = document.createElement('div');
+    header.className = 'exit-planning-card-header';
+    header.textContent = '\u{1F4CB} Exit Planning Mode?';
+
+    const body = document.createElement('div');
+    body.className = 'exit-planning-card-body';
+    body.textContent = reason;
+
+    const actions = document.createElement('div');
+    actions.className = 'exit-planning-card-actions';
+
+    const acceptBtn = document.createElement('button');
+    acceptBtn.className = 'exit-planning-btn accept';
+    acceptBtn.textContent = '\u2714 Start Implementing';
+    acceptBtn.addEventListener('click', () => {
+      vscode.postMessage({ type: 'exitPlanningModeDecision', accepted: true });
+      acceptBtn.disabled = true;
+      rejectBtn.disabled = true;
+      body.textContent = 'Planning mode turned off — implementing...';
+    });
+
+    const rejectBtn = document.createElement('button');
+    rejectBtn.className = 'exit-planning-btn reject';
+    rejectBtn.textContent = '\u2716 Stay in Planning';
+    rejectBtn.addEventListener('click', () => {
+      vscode.postMessage({ type: 'exitPlanningModeDecision', accepted: false });
+      acceptBtn.disabled = true;
+      rejectBtn.disabled = true;
+      body.textContent = 'Staying in planning mode.';
+    });
+
+    actions.appendChild(acceptBtn);
+    actions.appendChild(rejectBtn);
+
+    card.appendChild(header);
+    card.appendChild(body);
+    card.appendChild(actions);
+    messagesEl.appendChild(card);
+    scrollToBottom();
   }
 
   function formatToolArgs(args) {

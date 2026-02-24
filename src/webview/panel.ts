@@ -11,6 +11,7 @@ import { McpServerConfig } from '../mcp/types';
 import { SessionManager, BufferedMessage, TodoItem, TodoItemStatus, SmartTodoPlan } from '../sessions/manager';
 import { ChatMessage, ToolResult as ProviderToolResult } from '../providers/types';
 import { AskQuestionTool } from '../tools/question';
+import { ExitPlanningModeTool } from '../tools/planning';
 import { RunTerminalTool } from '../tools/terminal';
 import { SandboxManager } from '../sandbox/manager';
 
@@ -118,6 +119,7 @@ Rules:
   private mcpClient: McpClient;
   private activeFileContext: { path: string; content: string } | null = null;
   private activeFileEnabled = false;
+  private planningMode = false;
   private sandboxManager?: SandboxManager;
 
   constructor(
@@ -201,6 +203,11 @@ Rules:
             if (askToolCancel && (askToolCancel as unknown as AskQuestionTool).hasPendingQuestion()) {
               (askToolCancel as unknown as AskQuestionTool).cancelPending();
             }
+            // Cancel any pending exitPlanningMode tool
+            const exitPlanTool = this.tools.get('exitPlanningMode');
+            if (exitPlanTool && (exitPlanTool as unknown as ExitPlanningModeTool).hasPendingDecision()) {
+              (exitPlanTool as unknown as ExitPlanningModeTool).cancelPending();
+            }
           }
           break;
         case 'newChat':
@@ -217,6 +224,23 @@ Rules:
           break;
         case 'getModes':
           this.handleGetModes();
+          break;
+        case 'togglePlanningMode':
+          this.planningMode = !!message.enabled;
+          this.postMessage({ type: 'planningModeChanged', enabled: this.planningMode });
+          break;
+        case 'exitPlanningModeDecision':
+          {
+            const exitTool = this.tools.get('exitPlanningMode');
+            if (exitTool && (exitTool as unknown as ExitPlanningModeTool).hasPendingDecision()) {
+              const accepted = !!message.accepted;
+              if (accepted) {
+                this.planningMode = false;
+                this.postMessage({ type: 'planningModeChanged', enabled: false });
+              }
+              (exitTool as unknown as ExitPlanningModeTool).resolveDecision(accepted);
+            }
+          }
           break;
         case 'setMode':
           if (message.modeId) {
@@ -436,6 +460,15 @@ Rules:
       allowedToolNames = allowedToolNames.filter(n => n !== 'runSandboxedCommand');
     }
 
+    // Planning mode: restrict to read-only tools + exitPlanningMode + askQuestion
+    if (this.planningMode) {
+      const PLANNING_ALLOWED = new Set([
+        'readFile', 'listFiles', 'getDiagnostics', 'getSandboxStatus',
+        'askQuestion', 'exitPlanningMode',
+      ]);
+      allowedToolNames = allowedToolNames.filter(n => PLANNING_ALLOWED.has(n));
+    }
+
     // During execution rounds, remove read-only tools so weak LLMs cannot spin
     // on listFiles/getDiagnostics/getSandboxStatus without ever writing files.
     // readFile is kept because the LLM may need to read existing code for modifications.
@@ -570,6 +603,15 @@ Rules:
                 this.postSessionMessage(sessionId, {
                   type: 'askQuestion',
                   question: (toolCall.arguments.question as string) || 'The assistant has a question for you.',
+                  toolCallId: toolCall.id,
+                });
+              }
+
+              // Special handling for exitPlanningMode
+              if (toolCall.name === 'exitPlanningMode') {
+                this.postSessionMessage(sessionId, {
+                  type: 'exitPlanningModeRequest',
+                  reason: (toolCall.arguments.reason as string) || 'The assistant wants to exit planning mode.',
                   toolCallId: toolCall.id,
                 });
               }
@@ -2033,6 +2075,11 @@ Rules:
       <div id="controls-section">
         <div class="control-row">
           <span id="current-mode-display" class="control-value" title="Current mode">Sandbox</span>
+          <span class="control-separator">\u00B7</span>
+          <label id="planning-toggle" class="planning-toggle" title="Restrict tools to read-only (planning mode)">
+            <input type="checkbox" id="planning-checkbox" />
+            <span class="planning-label">Plan</span>
+          </label>
           <span class="control-separator">\u00B7</span>
           <button id="active-file-toggle" class="active-file-btn" title="Toggle active file as context">
             <span id="active-file-display">None</span>

@@ -679,6 +679,101 @@ body {
   user-select: none;
 }
 
+/* Planning mode toggle */
+.planning-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  user-select: none;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+  color: var(--vscode-foreground);
+  opacity: 0.7;
+}
+
+.planning-toggle:hover {
+  opacity: 1;
+  border-color: var(--vscode-focusBorder);
+}
+
+.planning-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--vscode-textLink-foreground);
+}
+
+.planning-toggle.enabled {
+  opacity: 1;
+  background: var(--vscode-editor-selectionBackground);
+  border-color: var(--vscode-focusBorder);
+}
+
+.planning-label {
+  font-weight: 500;
+}
+
+/* Exit planning mode card */
+.exit-planning-card {
+  padding: 10px 12px;
+  margin: 8px 0;
+  border-radius: 6px;
+  background: var(--vscode-editor-selectionBackground);
+  border: 1px solid var(--vscode-focusBorder);
+}
+
+.exit-planning-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.exit-planning-card-body {
+  font-size: 12px;
+  opacity: 0.85;
+  margin-bottom: 10px;
+}
+
+.exit-planning-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.exit-planning-btn {
+  padding: 4px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+}
+
+.exit-planning-btn.accept {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.exit-planning-btn.accept:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.exit-planning-btn.reject {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+
+.exit-planning-btn.reject:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
 /* Stop button */
 .stop-btn {
   padding: 2px 8px;
