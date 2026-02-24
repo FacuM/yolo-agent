@@ -4,7 +4,7 @@ import { ProviderRegistry } from './providers/registry';
 import { ChatViewProvider } from './webview/panel';
 import { Tool } from './tools/types';
 import { ReadFileTool, WriteFileTool, ListFilesTool } from './tools/file-ops';
-import { RunTerminalTool } from './tools/terminal';
+import { RunTerminalTool, RunBackgroundTerminalTool, GetBackgroundTerminalTool } from './tools/terminal';
 import { GetDiagnosticsTool } from './tools/diagnostics';
 import { AskQuestionTool } from './tools/question';
 import { ExitPlanningModeTool } from './tools/planning';
@@ -102,6 +102,8 @@ export async function activate(
     new WriteFileTool(sandboxManager),
     new ListFilesTool(sandboxManager),
     new RunTerminalTool(sandboxManager),
+    new RunBackgroundTerminalTool(sandboxManager),
+    new GetBackgroundTerminalTool(),
     new GetDiagnosticsTool(),
     new AskQuestionTool(),
     new ExitPlanningModeTool(),

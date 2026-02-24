@@ -231,25 +231,15 @@ Rules:
           break;
         case 'proceedWithPlan':
           {
-            // Disable planning mode and send the plan to the agent for implementation
+            // Disable planning mode and route the plan through the normal
+            // message handling pipeline so that Smart To-Do orchestration,
+            // sandbox isolation, and mode-specific behaviour are all preserved.
             this.planningMode = false;
             this.postMessage({ type: 'planningModeChanged', enabled: false });
             const planText = message.planText as string;
             if (planText) {
-              const session = this.sessionManager.getOrCreateActiveSession(
-                this.registry.getActiveProviderId(),
-                this.registry.getActiveModelId()
-              );
               const implementPrompt = `Implement the following plan. Follow it step by step, using the tools available to you. Do not ask for confirmation — just execute each step.\n\n---\n${planText}\n---`;
-              const implementSystemPrompt = `You are an expert software engineer. You have been given a plan to implement. Execute it step by step using the tools available to you.
-
-Rules:
-- Create or modify files exactly as described in the plan.
-- Run terminal commands when needed (e.g., to install dependencies or verify results).
-- Do NOT re-plan or ask for permission. Execute each step immediately.
-- After completing all steps, briefly summarize what was done.`;
-              // Call sendOneLLMRound directly with an implementation system prompt
-              await this.sendOneLLMRound(session.id, implementPrompt, undefined, implementSystemPrompt);
+              await this.handleSendMessage(implementPrompt);
             }
           }
           break;
