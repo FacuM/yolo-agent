@@ -112,6 +112,7 @@ Rules:
   private extensionUri: vscode.Uri;
   private sessionManager: SessionManager;
   private abortControllers = new Map<string, AbortController>();
+  private cancelledSessions = new Set<string>();
   private contextManager: ContextManager;
   private mcpConfigManager: McpConfigManager;
   private mcpClient: McpClient;
@@ -187,11 +188,13 @@ Rules:
           {
             const activeId = this.sessionManager.getActiveSessionId();
             if (activeId) {
+              this.cancelledSessions.add(activeId);
               const ctrl = this.abortControllers.get(activeId);
               if (ctrl) {
                 ctrl.abort();
                 this.abortControllers.delete(activeId);
               }
+              this.sessionManager.setSessionStatus(activeId, 'idle');
             }
             // Cancel any pending askQuestion tool
             const askToolCancel = this.tools.get('askQuestion');
@@ -399,6 +402,9 @@ Rules:
       (askTool as unknown as AskQuestionTool).resolveAnswer(text);
       return;
     }
+
+    // Clear any stale cancellation flag from a previous run
+    this.cancelledSessions.delete(sessionId);
 
     // --- Normal flow ---
     await this.sendOneLLMRound(sessionId, text, fileReferences);
@@ -815,11 +821,20 @@ Rules:
     let responseText = '';
     let firstChunkReceived = false;
     try {
-      // Use the session's abort controller if available
-      const abortCtrl = this.abortControllers.get(sessionId);
+      // Ensure an abort controller exists so Stop works during planning/verification
+      if (!this.abortControllers.has(sessionId)) {
+        this.abortControllers.set(sessionId, new AbortController());
+      }
+      const abortCtrl = this.abortControllers.get(sessionId)!;
+
+      // If already cancelled before we start, bail early
+      if (abortCtrl.signal.aborted || this.cancelledSessions.has(sessionId)) {
+        return '';
+      }
+
       const response = await provider.sendMessage(
         messages,
-        { model, signal: abortCtrl?.signal },  // no tools!
+        { model, signal: abortCtrl.signal },  // no tools!
         (chunk) => {
           if (!firstChunkReceived) {
             firstChunkReceived = true;
@@ -834,6 +849,12 @@ Rules:
       responseText = response.content ?? '';
       this.postSessionMessage(sessionId, { type: 'messageComplete' });
     } catch (err) {
+      // Handle abort/cancellation gracefully — don't show as error
+      if (this.cancelledSessions.has(sessionId) ||
+          (err instanceof Error && (err.name === 'AbortError' || err.message.includes('abort')))) {
+        this.cancelledSessions.add(sessionId);
+        return '';
+      }
       this.postSessionMessage(sessionId, {
         type: 'error',
         message: err instanceof Error ? err.message : String(err),
@@ -855,6 +876,9 @@ Rules:
     userText: string,
     fileReferences?: string[],
   ): Promise<void> {
+    // Clear any stale cancellation flag from a previous run
+    this.cancelledSessions.delete(sessionId);
+
     // Save the original user message in history (visible in replay)
     this.sessionManager.addMessage(sessionId, { role: 'user', content: userText });
 
@@ -878,6 +902,11 @@ Rules:
       todos: [],
       iteration: 0,
     });
+
+    // Ensure an abort controller exists for the planning phase so Stop works
+    if (!this.abortControllers.has(sessionId)) {
+      this.abortControllers.set(sessionId, new AbortController());
+    }
 
     // ── Phase 1: Planning (isolated call — no tools, no history) ────────
     try {
@@ -930,6 +959,13 @@ Rules:
         });
       }
 
+      if (this.cancelledSessions.has(sessionId)) {
+        this.cancelledSessions.delete(sessionId);
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        this.sessionManager.setSessionStatus(sessionId, 'idle');
+        return;
+      }
+
       await this.executePlanLoop(sessionId, userText, todos, sandboxPreamble);
     } catch (err) {
       // Errors in individual rounds are already reported; this catches unexpected breaks
@@ -939,6 +975,9 @@ Rules:
           message: `Smart To-Do loop error: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
+      // Ensure session goes idle on any error/abort
+      this.cancelledSessions.delete(sessionId);
+      this.sessionManager.setSessionStatus(sessionId, 'idle');
     }
   }
 
@@ -1003,6 +1042,13 @@ Rules:
         });
       }
 
+      if (this.cancelledSessions.has(sessionId)) {
+        this.cancelledSessions.delete(sessionId);
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        this.sessionManager.setSessionStatus(sessionId, 'idle');
+        return;
+      }
+
       await this.executePlanLoop(sessionId, smartTodo.userRequest, todos, sandboxPreamble);
     } catch (err) {
       if (!(err instanceof Error && err.message.includes('abort'))) {
@@ -1011,6 +1057,8 @@ Rules:
           message: `Smart To-Do loop error: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
+      this.cancelledSessions.delete(sessionId);
+      this.sessionManager.setSessionStatus(sessionId, 'idle');
     }
   }
 
@@ -1075,7 +1123,16 @@ Rules:
 
     while (iteration < maxIter) {
       // Check if aborted
-      if (!this.sessionManager.getSession(sessionId)) { break; }
+      if (!this.sessionManager.getSession(sessionId) || this.cancelledSessions.has(sessionId)) {
+        this.cancelledSessions.delete(sessionId);
+        this.postSessionMessage(sessionId, {
+          type: 'streamChunk',
+          content: '\n\n*[Generation stopped]*',
+        });
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        this.sessionManager.setSessionStatus(sessionId, 'idle');
+        return;
+      }
 
       // ── Execution pass ──────────────────────────────────────────────
       const execPrompt = sandboxPreamble + ChatViewProvider.SMART_TODO_EXECUTION_PROMPT
@@ -1101,7 +1158,15 @@ Rules:
       // Restrict read-only tools (listFiles, getDiagnostics, getSandboxStatus) during execution
       // so weak LLMs are forced to use writeFile/runTerminal instead of spinning on reads.
       // Mark as internal so these orchestration messages don't appear in session replay.
-      await this.sendOneLLMRound(sessionId, execUserMsg, undefined, execPrompt, true, true);
+      const execResult = await this.sendOneLLMRound(sessionId, execUserMsg, undefined, execPrompt, true, true);
+
+      // Check if cancelled during execution round
+      if (this.cancelledSessions.has(sessionId) || execResult === '[CANCELLED]') {
+        this.cancelledSessions.delete(sessionId);
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        this.sessionManager.setSessionStatus(sessionId, 'idle');
+        return;
+      }
 
       // Check if execution was productive: compare files after execution
       let executionProductive = false;
@@ -1131,6 +1196,19 @@ Rules:
           this.postSessionMessage(sessionId, { type: 'messageComplete' });
           break;
         }
+      }
+
+      // Check cancellation before verification
+      if (this.cancelledSessions.has(sessionId)) {
+        this.cancelledSessions.delete(sessionId);
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        this.sessionManager.setSessionStatus(sessionId, 'idle');
+        return;
+      }
+
+      // Ensure abort controller exists for the verification round
+      if (!this.abortControllers.has(sessionId)) {
+        this.abortControllers.set(sessionId, new AbortController());
       }
 
       // ── Verification pass (tool-free to prevent spinning) ──────────
@@ -1185,6 +1263,14 @@ Rules:
         verifyPrompt,
         `Verify the current state of all TODOs. This is verification iteration ${iteration}. Based on the workspace files shown above, determine which TODOs are DONE and which have FAILED.`,
       );
+
+      // Check if cancelled during verification round
+      if (this.cancelledSessions.has(sessionId)) {
+        this.cancelledSessions.delete(sessionId);
+        this.postSessionMessage(sessionId, { type: 'messageComplete' });
+        this.sessionManager.setSessionStatus(sessionId, 'idle');
+        return;
+      }
 
       // Parse verification results and update todo statuses
       this.parseVerificationResponse(sessionId, verifyResponse, todos);
