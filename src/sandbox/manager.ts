@@ -487,6 +487,34 @@ export class SandboxManager {
       throw new Error(`Failed to create git worktree: ${err}`);
     }
 
+    // Verify the worktree is a valid git repository before proceeding.
+    // git worktree add can occasionally create the directory without a proper .git
+    // linkage file (e.g., interrupted operation, filesystem issues).
+    try {
+      await execAsync('git rev-parse --git-dir', { cwd: worktreePath });
+    } catch {
+      // Try to repair: remove the half-created worktree directory and retry once
+      try {
+        await execAsync(`git worktree remove "${worktreePath}" --force`, { cwd: workspacePath }).catch(() => {});
+        await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+        await execAsync('git worktree prune', { cwd: workspacePath }).catch(() => {});
+        // Delete the orphaned branch so we can retry cleanly
+        await execAsync(`git branch -D "${branchName}"`, { cwd: workspacePath }).catch(() => {});
+        // Retry worktree creation
+        await execAsync(
+          `git worktree add -b "${branchName}" "${worktreePath}"`,
+          { cwd: workspacePath }
+        );
+        // Verify the retry
+        await execAsync('git rev-parse --git-dir', { cwd: worktreePath });
+      } catch (retryErr) {
+        throw new Error(
+          `Git worktree was created at "${worktreePath}" but is not a valid git repository. ` +
+          `Repair attempt failed: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`
+        );
+      }
+    }
+
     // Initialize OS-level sandbox if available
     if (hasOsLevelSandbox) {
       try {
@@ -808,6 +836,23 @@ export class SandboxManager {
   private async autoCommitWorktree(worktreePath: string, message: string): Promise<boolean> {
     const execOpts = { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 };
 
+    // Verify the worktree is still a valid git repository.
+    // The .git file (a pointer back to the main repo) can go missing if
+    // a tool or command removed it, or if creation was incomplete.
+    try {
+      await execAsync('git rev-parse --git-dir', execOpts);
+    } catch {
+      // Attempt repair: recreate the .git linkage file from the parent repo
+      const repaired = await this.repairWorktreeGitLink(worktreePath);
+      if (!repaired) {
+        throw new Error(
+          `The worktree at "${worktreePath}" is not a valid git repository ` +
+          `(missing .git linkage file) and could not be repaired automatically. ` +
+          `You can manually copy any needed files from that directory.`
+        );
+      }
+    }
+
     // Check if there are uncommitted changes
     const { stdout: status } = await execAsync('git status --porcelain', execOpts);
     if (!status.trim()) {
@@ -829,6 +874,65 @@ export class SandboxManager {
     }
 
     return true;
+  }
+
+  /**
+   * Attempt to repair a worktree whose .git linkage file is missing.
+   * A git worktree normally has a `.git` *file* (not directory) containing:
+   *   gitdir: /path/to/main-repo/.git/worktrees/<name>
+   *
+   * If this file is deleted, we can reconstruct it from the parent repo.
+   * Returns true if repair succeeded, false otherwise.
+   */
+  private async repairWorktreeGitLink(worktreePath: string): Promise<boolean> {
+    if (!this.currentSandbox) { return false; }
+    const { originalPath } = this.currentSandbox;
+    const gitDir = path.join(originalPath, '.git');
+
+    try {
+      // Check whether the main repo .git exists
+      const mainGitStat = await fs.stat(gitDir);
+      if (!mainGitStat.isDirectory()) { return false; }
+
+      // Look for a worktrees/ entry that points to our worktreePath
+      const worktreesDir = path.join(gitDir, 'worktrees');
+      let entries: string[];
+      try {
+        entries = await fs.readdir(worktreesDir);
+      } catch {
+        return false; // No worktrees directory at all
+      }
+
+      for (const entry of entries) {
+        const gitdirFile = path.join(worktreesDir, entry, 'gitdir');
+        try {
+          const gitdirContent = (await fs.readFile(gitdirFile, 'utf8')).trim();
+          // The gitdir file in .git/worktrees/<name>/gitdir contains the path
+          // to the worktree's .git file (e.g., /path/to/worktree/.git)
+          const expectedWorktreeGit = path.join(worktreePath, '.git');
+          if (path.resolve(gitdirContent) === path.resolve(expectedWorktreeGit)) {
+            // Found the matching worktree entry — recreate the .git linkage file
+            const linkTarget = path.join(worktreesDir, entry);
+            await fs.writeFile(
+              expectedWorktreeGit,
+              `gitdir: ${linkTarget}\n`,
+              'utf8'
+            );
+            // Verify the repair
+            await execAsync('git rev-parse --git-dir', { cwd: worktreePath });
+            console.log(`[sandbox] Repaired .git linkage for worktree at ${worktreePath}`);
+            return true;
+          }
+        } catch {
+          continue; // This entry doesn't match or is unreadable
+        }
+      }
+
+      return false;
+    } catch (err) {
+      console.warn(`[sandbox] Failed to repair worktree .git linkage: ${err}`);
+      return false;
+    }
   }
 
   /**
