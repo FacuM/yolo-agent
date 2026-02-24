@@ -2,7 +2,7 @@
   "name": "yolo-agent",
   "displayName": "YOLO Agent",
   "description": "A coding agent for VS Code powered by multiple AI providers",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "facuarmo",
   "icon": "media/icon.png",
   "repository": {
