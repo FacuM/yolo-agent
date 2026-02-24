@@ -2197,7 +2197,7 @@
     if (contextAgentsMd.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'settings-empty';
-      empty.textContent = 'No AGENTS.md files found';
+      empty.textContent = 'No context files found (AGENTS.md, .github/*.md, .*/rules/*.md)';
       contextAgentsList.appendChild(empty);
       return;
     }

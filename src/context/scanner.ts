@@ -53,7 +53,7 @@ function parseFrontmatter(content: string): { frontmatter: Record<string, unknow
 export class ContextScanner {
   private skills: Map<string, Skill> = new Map();
   private agentsMdFiles: Map<string, AgentsMd> = new Map();
-  private fileWatcher: vscode.FileSystemWatcher | undefined;
+  private contextWatchers: vscode.FileSystemWatcher[] = [];
   private skillsWatchers: vscode.FileSystemWatcher[] = [];
   private _onDidChangeContext = new vscode.EventEmitter<void>();
   private workspaceFolder: vscode.WorkspaceFolder | undefined;
@@ -142,7 +142,8 @@ export class ContextScanner {
   }
 
   /**
-   * Scan for AGENTS.md files up to 2 levels deep in the workspace
+   * Scan for context files: AGENTS.md (up to 2 levels deep),
+   * .github markdown files, and dot-directory rules (e.g. .kilocode/rules/)
    */
   private async scanAgentsMdFiles(): Promise<void> {
     if (!this.workspaceFolder) {
@@ -157,6 +158,10 @@ export class ContextScanner {
       new vscode.RelativePattern(this.workspaceFolder, '*/agents.md'),
       new vscode.RelativePattern(this.workspaceFolder, '*/*/AGENTS.md'),
       new vscode.RelativePattern(this.workspaceFolder, '*/*/agents.md'),
+      // .github markdown files and subdirectories
+      new vscode.RelativePattern(this.workspaceFolder, '.github/**/*.md'),
+      // .*/rules/ markdown files (e.g. .kilocode/rules/, .cursor/rules/)
+      new vscode.RelativePattern(this.workspaceFolder, '.*/rules/**/*.md'),
     ];
 
     // Clear existing AGENTS.md files
@@ -249,34 +254,35 @@ export class ContextScanner {
       this.skillsWatchers.push(watcher);
     }
 
-    // Watch for changes to AGENTS.md files
-    const agentsMdPattern = new vscode.RelativePattern(this.workspaceFolder, '**/AGENTS.md');
-    const agentsMdPatternLower = new vscode.RelativePattern(this.workspaceFolder, '**/agents.md');
+    // Watch for changes to context files (AGENTS.md, .github/*.md, .*/rules/*.md)
+    const contextPatterns = [
+      '**/{A,a}gents.md',
+      '.github/**/*.md',
+      '.*/rules/**/*.md',
+    ];
 
-    this.fileWatcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(this.workspaceFolder, '**/{A,a}gents.md')
-    );
+    for (const pattern of contextPatterns) {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(this.workspaceFolder, pattern)
+      );
 
-    this.fileWatcher.onDidCreate(async (uri) => {
-      if (path.basename(uri.fsPath).toLowerCase() === 'agents.md') {
+      watcher.onDidCreate(async (uri) => {
         await this.loadAgentsMdFile(uri);
         this._onDidChangeContext.fire();
-      }
-    });
+      });
 
-    this.fileWatcher.onDidChange(async (uri) => {
-      if (path.basename(uri.fsPath).toLowerCase() === 'agents.md') {
+      watcher.onDidChange(async (uri) => {
         await this.loadAgentsMdFile(uri);
         this._onDidChangeContext.fire();
-      }
-    });
+      });
 
-    this.fileWatcher.onDidDelete((uri) => {
-      if (path.basename(uri.fsPath).toLowerCase() === 'agents.md') {
+      watcher.onDidDelete((uri) => {
         this.agentsMdFiles.delete(uri.fsPath);
         this._onDidChangeContext.fire();
-      }
-    });
+      });
+
+      this.contextWatchers.push(watcher);
+    }
   }
 
   /**
@@ -287,7 +293,10 @@ export class ContextScanner {
       watcher.dispose();
     }
     this.skillsWatchers = [];
-    this.fileWatcher?.dispose();
+    for (const watcher of this.contextWatchers) {
+      watcher.dispose();
+    }
+    this.contextWatchers = [];
     this._onDidChangeContext.dispose();
   }
 }

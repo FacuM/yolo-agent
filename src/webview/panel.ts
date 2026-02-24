@@ -443,7 +443,7 @@ Rules:
     // Build system prompt
     let modePrompt = systemPromptOverride ?? this.modeManager.getSystemPrompt();
 
-    // Add context from skills and AGENTS.md
+    // Add context from skills and context files (AGENTS.md, .github/*.md, .*/rules/*.md)
     const contextAddition = this.contextManager.getSystemPromptAddition();
     if (contextAddition) {
       modePrompt += '\n\n' + contextAddition;
@@ -2092,7 +2092,7 @@ Rules:
           <div id="context-skills-list"></div>
         </div>
         <div id="context-agents-section">
-          <h3>AGENTS.md Files</h3>
+          <h3>Context Files</h3>
           <div id="context-agents-list"></div>
         </div>
       </div>

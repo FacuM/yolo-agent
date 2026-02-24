@@ -115,7 +115,7 @@ export class ContextManager {
 
     // Add AGENTS.md section
     if (agentsMdFiles.length > 0) {
-      parts.push('## Project Context (AGENTS.md)\n');
+      parts.push('## Project Context (AGENTS.md & Rules)\n');
       for (const agentsMd of agentsMdFiles) {
         parts.push(`### ${agentsMd.projectName}`);
         parts.push(agentsMd.content);
