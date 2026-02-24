@@ -2379,3 +2379,76 @@ body {
   font-size: 13px;
   font-weight: 600;
 }
+
+/* ===== Timeout Slider ===== */
+.timeout-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.timeout-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--vscode-input-border, #333);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.timeout-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--vscode-button-background, #0e639c);
+  cursor: pointer;
+  border: none;
+}
+
+.timeout-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--vscode-button-background, #0e639c);
+  cursor: pointer;
+  border: none;
+}
+
+.timeout-value {
+  min-width: 32px;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-foreground, #ccc);
+  font-variant-numeric: tabular-nums;
+}
+
+.timeout-presets {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.timeout-preset {
+  padding: 2px 8px;
+  font-size: 11px;
+  border: 1px solid var(--vscode-input-border, #333);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--vscode-foreground, #ccc);
+  cursor: pointer;
+}
+
+.timeout-preset:hover {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.timeout-preset.active {
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #fff);
+  border-color: var(--vscode-button-background, #0e639c);
+}

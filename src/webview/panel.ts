@@ -2715,20 +2715,12 @@ IMPORTANT RULES:
         <span class="header-title">Settings</span>
       </div>
       <div id="settings-tabs">
-        <button id="tab-providers" class="tab-btn active">Providers</button>
+        <button id="tab-general" class="tab-btn active">General</button>
+        <button id="tab-providers" class="tab-btn">Providers</button>
         <button id="tab-mcp" class="tab-btn">MCP Servers</button>
-        <button id="tab-general" class="tab-btn">General</button>
       </div>
       <div id="settings-content">
-        <div id="providers-panel">
-          <div id="profiles-list"></div>
-          <button id="add-profile-btn" class="primary-btn">+ Add Provider</button>
-        </div>
-        <div id="mcp-panel" class="hidden">
-          <div id="mcp-servers-inline-list"></div>
-          <button id="mcp-settings-btn" class="primary-btn">Manage MCP Servers</button>
-        </div>
-        <div id="general-panel" class="hidden">
+        <div id="general-panel">
           <div class="settings-section">
             <h3>Context Compaction</h3>
             <div class="form-group">
@@ -2752,10 +2744,28 @@ IMPORTANT RULES:
               </div>
             </div>
             <div class="form-group" id="timeout-group">
-              <label for="compaction-timeout">Automatic compaction timeout (seconds)</label>
-              <input type="number" id="compaction-timeout" min="10" max="300" value="60" step="5">
+              <label>Automatic compaction timeout</label>
+              <div class="timeout-control">
+                <input type="range" id="compaction-timeout" min="10" max="300" value="60" step="5" class="timeout-slider">
+                <span id="timeout-value" class="timeout-value">60s</span>
+              </div>
+              <div class="timeout-presets">
+                <button class="timeout-preset" data-value="15">15s</button>
+                <button class="timeout-preset" data-value="30">30s</button>
+                <button class="timeout-preset" data-value="60">60s</button>
+                <button class="timeout-preset" data-value="120">2m</button>
+                <button class="timeout-preset" data-value="300">5m</button>
+              </div>
             </div>
           </div>
+        </div>
+        <div id="providers-panel" class="hidden">
+          <div id="profiles-list"></div>
+          <button id="add-profile-btn" class="primary-btn">+ Add Provider</button>
+        </div>
+        <div id="mcp-panel" class="hidden">
+          <div id="mcp-servers-inline-list"></div>
+          <button id="mcp-settings-btn" class="primary-btn">Manage MCP Servers</button>
         </div>
       </div>
     </div>

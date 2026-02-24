@@ -138,6 +138,7 @@
   const mcpServersInlineList = document.getElementById('mcp-servers-inline-list');
   const compactionMethodGroup = document.getElementById('compaction-method-group');
   const compactionTimeoutInput = /** @type {HTMLInputElement} */ (document.getElementById('compaction-timeout'));
+  const timeoutValueDisplay = document.getElementById('timeout-value');
   const timeoutGroup = document.getElementById('timeout-group');
 
   // ===== MCP View Elements =====
@@ -418,7 +419,7 @@
 
   settingsBtn.addEventListener('click', () => {
     showView('settings');
-    vscode.postMessage({ type: 'getProfiles' });
+    vscode.postMessage({ type: 'getCompactionSettings' });
   });
 
   contextBtn.addEventListener('click', () => {
@@ -529,6 +530,7 @@
     providersPanel.classList.remove('hidden');
     mcpPanel.classList.add('hidden');
     generalPanel.classList.add('hidden');
+    vscode.postMessage({ type: 'getProfiles' });
   });
 
   tabMcp.addEventListener('click', () => {
@@ -562,13 +564,53 @@
     });
   });
 
-  // Timeout input change
-  compactionTimeoutInput.addEventListener('change', () => {
+  // Helper: format seconds as display label
+  function formatTimeout(seconds) {
+    if (seconds >= 60 && seconds % 60 === 0) {
+      return (seconds / 60) + 'm';
+    }
+    return seconds + 's';
+  }
+
+  // Helper: update slider value display and save
+  function updateTimeoutValue(seconds) {
+    compactionTimeoutInput.value = seconds;
+    timeoutValueDisplay.textContent = formatTimeout(seconds);
+    // Update active preset button
+    document.querySelectorAll('.timeout-preset').forEach(btn => {
+      btn.classList.toggle('active', parseInt(btn.dataset.value, 10) === seconds);
+    });
+  }
+
+  function saveTimeoutSettings() {
     const selectedMethod = compactionMethodGroup.querySelector('input[name="compaction-method"]:checked');
     vscode.postMessage({
       type: 'saveCompactionSettings',
       method: selectedMethod ? selectedMethod.value : 'semi-automatic',
       timeoutSeconds: parseInt(compactionTimeoutInput.value, 10) || 60,
+    });
+  }
+
+  // Slider real-time feedback
+  compactionTimeoutInput.addEventListener('input', () => {
+    const val = parseInt(compactionTimeoutInput.value, 10) || 60;
+    timeoutValueDisplay.textContent = formatTimeout(val);
+    document.querySelectorAll('.timeout-preset').forEach(btn => {
+      btn.classList.toggle('active', parseInt(btn.dataset.value, 10) === val);
+    });
+  });
+
+  // Slider commit (on release)
+  compactionTimeoutInput.addEventListener('change', () => {
+    saveTimeoutSettings();
+  });
+
+  // Preset buttons
+  document.querySelectorAll('.timeout-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = parseInt(btn.dataset.value, 10);
+      updateTimeoutValue(val);
+      saveTimeoutSettings();
     });
   });
 
@@ -938,7 +980,8 @@
           'input[value="' + message.method + '"]'
         );
         if (methodRadio) { methodRadio.checked = true; }
-        compactionTimeoutInput.value = message.timeoutSeconds || 60;
+        const timeoutVal = message.timeoutSeconds || 60;
+        updateTimeoutValue(timeoutVal);
         timeoutGroup.style.display = message.method === 'semi-automatic' ? '' : 'none';
         break;
       }
