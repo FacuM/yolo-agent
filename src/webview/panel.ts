@@ -14,6 +14,7 @@ import { AskQuestionTool } from '../tools/question';
 import { ExitPlanningModeTool } from '../tools/planning';
 import { RunTerminalTool } from '../tools/terminal';
 import { SandboxManager } from '../sandbox/manager';
+import { getCompactionSettings, saveCompactionSettings } from '../config/settings';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'yoloAgent.chatView';
@@ -135,6 +136,7 @@ Be thorough but concise. This summary will replace the full conversation history
   private planningMode = false;
   private sandboxManager?: SandboxManager;
   private globalState: vscode.Memento;
+  private compactionResolver: ((action: 'compacted' | 'cancelled') => void) | null = null;
 
   constructor(
     globalState: vscode.Memento,
@@ -373,6 +375,51 @@ Be thorough but concise. This summary will replace the full conversation history
           break;
         case 'compactContext':
           await this.handleCompactContext();
+          break;
+        case 'compactNow': {
+          const activeId = this.sessionManager.getActiveSessionId();
+          if (activeId) {
+            await this.performCompaction(activeId);
+            this.sendContextUsage(activeId);
+            this.postSessionMessage(activeId, { type: 'compactionComplete' });
+          }
+          if (this.compactionResolver) {
+            this.compactionResolver('compacted');
+          }
+          break;
+        }
+        case 'compactWithDigest': {
+          const activeId = this.sessionManager.getActiveSessionId();
+          if (activeId && message.editedDigest) {
+            await this.performCompactionWithDigest(activeId, message.editedDigest);
+            this.sendContextUsage(activeId);
+            this.postSessionMessage(activeId, { type: 'compactionComplete' });
+          }
+          if (this.compactionResolver) {
+            this.compactionResolver('compacted');
+          }
+          break;
+        }
+        case 'compactCancel':
+          if (this.compactionResolver) {
+            this.compactionResolver('cancelled');
+          }
+          break;
+        case 'getCompactionSettings':
+          this.postMessage({
+            type: 'compactionSettings',
+            ...getCompactionSettings(this.globalState),
+          });
+          break;
+        case 'saveCompactionSettings':
+          await saveCompactionSettings(this.globalState, {
+            method: message.method,
+            timeoutSeconds: message.timeoutSeconds,
+          });
+          this.postMessage({
+            type: 'compactionSettings',
+            ...getCompactionSettings(this.globalState),
+          });
           break;
 
         // Active file context
@@ -674,17 +721,61 @@ IMPORTANT RULES:
         firstChunkReceived = false;
         this.postSessionMessage(sessionId, { type: 'waitingForApi' });
 
-        // ── Pre-overflow check: auto-compact if approaching context limit ──
+        // ── Pre-overflow check: context compaction based on settings ──
         const preCheckUsage = this.sessionManager.getTokenUsage(sessionId);
         const contextLimit = await this.getActiveContextWindow();
         const totalUsed = preCheckUsage.inputTokens + preCheckUsage.outputTokens;
         if (contextLimit > 0 && totalUsed > contextLimit * ChatViewProvider.CONTEXT_COMPACTION_THRESHOLD && toolIteration > 0) {
-          this.postSessionMessage(sessionId, {
-            type: 'streamChunk',
-            content: '\n\n\u26A0\uFE0F *Context usage at ' + Math.round((totalUsed / contextLimit) * 100) + '% — auto-compacting to avoid overflow...*\n',
-          });
-          await this.performCompaction(sessionId);
-          // Rebuild messages array from compacted history
+          const settings = getCompactionSettings(this.globalState);
+          const percentage = Math.round((totalUsed / contextLimit) * 100);
+
+          if (settings.method === 'automatic') {
+            // Current behavior: compact immediately
+            this.postSessionMessage(sessionId, {
+              type: 'streamChunk',
+              content: '\n\n\u26A0\uFE0F *Context usage at ' + percentage + '% — auto-compacting to avoid overflow...*\n',
+            });
+            await this.performCompaction(sessionId);
+          } else {
+            // Semi-automatic or manual: pause and wait for user action
+            const digest = this.buildConversationDigest(sessionId);
+
+            if (settings.method === 'semi-automatic') {
+              this.postSessionMessage(sessionId, {
+                type: 'compactionCountdown',
+                timeout: settings.timeoutSeconds,
+                digest,
+                percentage,
+              });
+            } else {
+              // manual
+              this.postSessionMessage(sessionId, {
+                type: 'compactionPending',
+                digest,
+                percentage,
+              });
+            }
+
+            // Pause: wait for user action
+            const action = await new Promise<'compacted' | 'cancelled'>((resolve) => {
+              this.compactionResolver = resolve;
+            });
+            this.compactionResolver = null;
+
+            if (action === 'cancelled') {
+              // User cancelled — continue without compaction (risky but their choice)
+              this.postSessionMessage(sessionId, { type: 'compactionComplete' });
+              const cancelledHistory = this.sessionManager.getHistory(sessionId);
+              messages.length = 0;
+              messages.push({ role: 'system', content: modePrompt });
+              messages.push(...cancelledHistory);
+              messages.push({ role: 'user', content: 'Continue from where you left off. Here is what was happening: you were in tool iteration ' + toolIteration + ' of an ongoing task.' });
+              this.sendContextUsage(sessionId);
+              continue;
+            }
+          }
+
+          // Rebuild messages from compacted history
           const compactedHistory = this.sessionManager.getHistory(sessionId);
           messages.length = 0;
           messages.push({ role: 'system', content: modePrompt });
@@ -2378,15 +2469,11 @@ IMPORTANT RULES:
   }
 
   /**
-   * Perform context compaction: ask the LLM to summarize the conversation,
-   * then replace the history with the compacted summary.
+   * Build a role-labeled digest of the conversation for compaction.
    */
-  private async performCompaction(sessionId: string): Promise<void> {
+  private buildConversationDigest(sessionId: string): string {
     const history = this.sessionManager.getHistory(sessionId);
-    if (history.length <= 1) { return; }
-
-    // Build a digest of the conversation for the summary LLM call
-    const digest = history
+    return history
       .filter(m => !m.internal || m.content.includes('[Compacted conversation context]'))
       .map(m => {
         let prefix = m.role.toUpperCase();
@@ -2395,7 +2482,24 @@ IMPORTANT RULES:
         return `[${prefix}]: ${m.content.slice(0, 2000)}`;
       })
       .join('\n\n');
+  }
 
+  /**
+   * Perform context compaction: ask the LLM to summarize the conversation,
+   * then replace the history with the compacted summary.
+   */
+  private async performCompaction(sessionId: string): Promise<void> {
+    const history = this.sessionManager.getHistory(sessionId);
+    if (history.length <= 1) { return; }
+
+    const digest = this.buildConversationDigest(sessionId);
+    await this.performCompactionWithDigest(sessionId, digest);
+  }
+
+  /**
+   * Perform compaction using a (possibly user-edited) digest.
+   */
+  private async performCompactionWithDigest(sessionId: string, editedDigest: string): Promise<void> {
     const provider = this.registry.getActiveProvider();
     if (!provider) { return; }
 
@@ -2404,7 +2508,7 @@ IMPORTANT RULES:
       const summaryResponse = await provider.sendMessage(
         [
           { role: 'system', content: ChatViewProvider.COMPACTION_PROMPT },
-          { role: 'user', content: `Here is the conversation to summarize:\n\n${digest}` },
+          { role: 'user', content: `Here is the conversation to summarize:\n\n${editedDigest}` },
         ],
         { model, maxTokens: 2048 },
         () => {} // No streaming needed for compaction
