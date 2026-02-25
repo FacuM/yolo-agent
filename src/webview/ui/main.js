@@ -12,6 +12,26 @@
   const STATUS_OPACITY = '0.6';
   const HANDLER_PROPERTY = '_yoloAgent_toggleHandler';
 
+  /**
+   * @param {Element | null} element
+   * @param {string} type
+   * @param {(event: any) => void} handler
+   */
+  function addListener(element, type, handler) {
+    if (!element) { return; }
+    element.addEventListener(type, handler);
+  }
+
+  /**
+   * @param {Element | null} element
+   * @param {string} className
+   * @param {boolean} force
+   */
+  function toggleClass(element, className, force) {
+    if (!element) { return; }
+    element.classList.toggle(className, force);
+  }
+
   // ===== View Router =====
   const chatView = document.getElementById('chat-view');
   const settingsView = document.getElementById('settings-view');
@@ -26,14 +46,14 @@
 
   function showView(view) {
     currentView = view;
-    chatView.classList.toggle('hidden', view !== 'chat');
-    settingsView.classList.toggle('hidden', view !== 'settings');
-    editorView.classList.toggle('hidden', view !== 'editor');
-    contextView.classList.toggle('hidden', view !== 'context');
-    mcpView.classList.toggle('hidden', view !== 'mcp');
-    mcpEditorView.classList.toggle('hidden', view !== 'mcp-editor');
-    sessionsView.classList.toggle('hidden', view !== 'sessions');
-    digestView.classList.toggle('hidden', view !== 'digest');
+    toggleClass(chatView, 'hidden', view !== 'chat');
+    toggleClass(settingsView, 'hidden', view !== 'settings');
+    toggleClass(editorView, 'hidden', view !== 'editor');
+    toggleClass(contextView, 'hidden', view !== 'context');
+    toggleClass(mcpView, 'hidden', view !== 'mcp');
+    toggleClass(mcpEditorView, 'hidden', view !== 'mcp-editor');
+    toggleClass(sessionsView, 'hidden', view !== 'sessions');
+    toggleClass(digestView, 'hidden', view !== 'digest');
   }
 
   // ===== Chat View Elements =====
@@ -201,19 +221,21 @@
   vscode.postMessage({ type: 'getMcpServers' });
 
   // ===== Chat Event Listeners =====
-  sendBtn.addEventListener('click', sendMessage);
+  addListener(sendBtn, 'click', sendMessage);
 
   // Send-mode context menu (caret button)
   const sendModeBtn = document.getElementById('send-mode-btn');
   const sendModeMenu = document.getElementById('send-mode-menu');
 
-  sendModeBtn.addEventListener('click', (e) => {
+  addListener(sendModeBtn, 'click', (e) => {
     e.stopPropagation();
+    if (!sendModeMenu) { return; }
     sendModeMenu.classList.toggle('hidden');
   });
 
   // Close menu on outside click
   document.addEventListener('click', () => {
+    if (!sendModeMenu) { return; }
     if (!sendModeMenu.classList.contains('hidden')) {
       sendModeMenu.classList.add('hidden');
     }
@@ -221,8 +243,9 @@
 
   // Wire send-mode menu options
   document.querySelectorAll('.send-mode-option').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    addListener(btn, 'click', (e) => {
       e.stopPropagation();
+      if (!sendModeMenu) { return; }
       sendModeMenu.classList.add('hidden');
       const mode = btn.dataset.mode;
       if (mode === 'steer') {
@@ -233,7 +256,7 @@
     });
   });
 
-  inputEl.addEventListener('keydown', (e) => {
+  addListener(inputEl, 'keydown', (e) => {
     // Handle autocomplete navigation
     if (autocompleteActive) {
       const items = autocompleteDropdown.querySelectorAll('.autocomplete-item');
@@ -278,14 +301,14 @@
     }
   });
 
-  providerSelect.addEventListener('change', () => {
+  addListener(providerSelect, 'change', () => {
     vscode.postMessage({ type: 'switchProvider', providerId: providerSelect.value });
   });
 
   // Planning mode checkbox
-  planningCheckbox.addEventListener('change', () => {
+  addListener(planningCheckbox, 'change', () => {
     const enabled = planningCheckbox.checked;
-    planningToggle.classList.toggle('enabled', enabled);
+    if (planningToggle) { planningToggle.classList.toggle('enabled', enabled); }
     vscode.postMessage({ type: 'togglePlanningMode', enabled });
   });
 
@@ -338,15 +361,15 @@
     }
   }
 
-  modelInput.addEventListener('focus', () => {
+  addListener(modelInput, 'focus', () => {
     renderModelDropdown(modelInput.value);
   });
 
-  modelInput.addEventListener('input', () => {
+  addListener(modelInput, 'input', () => {
     renderModelDropdown(modelInput.value);
   });
 
-  modelInput.addEventListener('blur', () => {
+  addListener(modelInput, 'blur', () => {
     // Delay to let mousedown fire on dropdown items
     setTimeout(() => {
       modelDropdown.classList.add('hidden');
@@ -360,7 +383,7 @@
     }, 150);
   });
 
-  modelInput.addEventListener('keydown', (e) => {
+  addListener(modelInput, 'keydown', (e) => {
     const items = modelDropdown.querySelectorAll('.model-dropdown-item');
     if (modelDropdown.classList.contains('hidden')) {
       if (e.key === 'ArrowDown' || e.key === 'Enter') {
@@ -393,56 +416,58 @@
     }
   });
 
-  modePickerBtn.addEventListener('click', () => {
+  addListener(modePickerBtn, 'click', () => {
+    if (!modeDropdown) { return; }
     modeDropdown.classList.toggle('hidden');
   });
 
   // Close mode dropdown when clicking outside
   document.addEventListener('click', (e) => {
+    if (!modePickerBtn || !modeDropdown) { return; }
     if (!modePickerBtn.contains(/** @type {Node} */ (e.target)) && !modeDropdown.contains(/** @type {Node} */ (e.target))) {
       modeDropdown.classList.add('hidden');
     }
   });
 
-  newChatBtn.addEventListener('click', () => {
+  addListener(newChatBtn, 'click', () => {
     vscode.postMessage({ type: 'newChat' });
   });
 
-  sessionsBtn.addEventListener('click', () => {
+  addListener(sessionsBtn, 'click', () => {
     showView('sessions');
     vscode.postMessage({ type: 'getSessions' });
   });
 
-  sessionsBackBtn.addEventListener('click', () => {
+  addListener(sessionsBackBtn, 'click', () => {
     showView('chat');
   });
 
-  settingsBtn.addEventListener('click', () => {
+  addListener(settingsBtn, 'click', () => {
     showView('settings');
     vscode.postMessage({ type: 'getCompactionSettings' });
   });
 
-  contextBtn.addEventListener('click', () => {
+  addListener(contextBtn, 'click', () => {
     showView('context');
     vscode.postMessage({ type: 'getContext' });
   });
 
   // Auto-resize textarea + autocomplete detection
-  inputEl.addEventListener('input', () => {
+  addListener(inputEl, 'input', () => {
     autoResizeTextarea();
     detectFileReference();
   });
 
   // Stop button
-  stopBtn.addEventListener('click', stopGeneration);
+  addListener(stopBtn, 'click', stopGeneration);
 
   // Steering buttons
   document.querySelectorAll('.steering-btn').forEach(btn => {
-    btn.addEventListener('click', () => handleSteering(btn.dataset.steer));
+    addListener(btn, 'click', () => handleSteering(btn.dataset.steer));
   });
 
   // Active file toggle
-  activeFileToggle.addEventListener('click', () => {
+  addListener(activeFileToggle, 'click', () => {
     vscode.postMessage({ type: 'toggleActiveFile' });
   });
 
@@ -450,7 +475,7 @@
   vscode.postMessage({ type: 'getActiveFile' });
 
   // Context tracker click — trigger compaction
-  contextTracker.addEventListener('click', () => {
+  addListener(contextTracker, 'click', () => {
     vscode.postMessage({ type: 'compactContext' });
   });
 
@@ -460,6 +485,7 @@
 
   function startCompactionCountdown(timeout, digest, percentage) {
     compactionDigest = digest;
+    if (!compactionBannerText || !compactionBanner) { return; }
     compactionBannerText.textContent = 'Context at ' + percentage + '% \u2014 auto-compacting in ' + timeout + 's...';
     compactionBanner.classList.remove('hidden');
 
@@ -479,51 +505,52 @@
       clearInterval(compactionTimer);
       compactionTimer = null;
     }
-    compactionBanner.classList.add('hidden');
+    if (compactionBanner) { compactionBanner.classList.add('hidden'); }
   }
 
   function showCompactionPending(digest, percentage) {
     compactionDigest = digest;
+    if (!compactionBannerText || !compactionBanner) { return; }
     compactionBannerText.textContent = 'Context at ' + percentage + '% \u2014 waiting for manual compaction...';
     compactionBanner.classList.remove('hidden');
   }
 
   // Compaction banner buttons
-  compactionEditBtn.addEventListener('click', () => {
+  addListener(compactionEditBtn, 'click', () => {
     clearCompactionCountdown();
-    digestTextarea.value = compactionDigest;
+    if (digestTextarea) { digestTextarea.value = compactionDigest; }
     showView('digest');
   });
 
-  compactionNowBtn.addEventListener('click', () => {
+  addListener(compactionNowBtn, 'click', () => {
     clearCompactionCountdown();
     vscode.postMessage({ type: 'compactNow' });
   });
 
   // ===== Digest Editor Event Listeners =====
-  digestBackBtn.addEventListener('click', () => {
+  addListener(digestBackBtn, 'click', () => {
     showView('chat');
     vscode.postMessage({ type: 'compactCancel' });
   });
 
-  digestCancelBtn.addEventListener('click', () => {
+  addListener(digestCancelBtn, 'click', () => {
     showView('chat');
     vscode.postMessage({ type: 'compactCancel' });
   });
 
-  digestCompactBtn.addEventListener('click', () => {
-    const editedDigest = digestTextarea.value;
+  addListener(digestCompactBtn, 'click', () => {
+    const editedDigest = digestTextarea ? digestTextarea.value : '';
     showView('chat');
     vscode.postMessage({ type: 'compactWithDigest', editedDigest });
   });
 
   // ===== Settings Event Listeners =====
-  settingsBackBtn.addEventListener('click', () => {
+  addListener(settingsBackBtn, 'click', () => {
     showView('chat');
   });
 
   // Settings sidebar navigation - event delegation
-  settingsSidebar.addEventListener('click', (e) => {
+  addListener(settingsSidebar, 'click', (e) => {
     const item = e.target.closest('.sidebar-item');
     if (!item) return;
     
@@ -538,9 +565,9 @@
     item.setAttribute('aria-current', 'page');
     
     // Show/hide panels
-    generalPanel.classList.toggle('hidden', tabId !== 'general');
-    providersPanel.classList.toggle('hidden', tabId !== 'providers');
-    mcpPanel.classList.toggle('hidden', tabId !== 'mcp');
+    if (generalPanel) { generalPanel.classList.toggle('hidden', tabId !== 'general'); }
+    if (providersPanel) { providersPanel.classList.toggle('hidden', tabId !== 'providers'); }
+    if (mcpPanel) { mcpPanel.classList.toggle('hidden', tabId !== 'mcp'); }
     
     // Request data for the selected tab
     if (tabId === 'providers') {
@@ -553,13 +580,13 @@
   });
 
   // Compaction method radio change
-  compactionMethodGroup.addEventListener('change', (e) => {
+  addListener(compactionMethodGroup, 'change', (e) => {
     const method = e.target.value;
-    timeoutGroup.style.display = method === 'semi-automatic' ? '' : 'none';
+    if (timeoutGroup) { timeoutGroup.style.display = method === 'semi-automatic' ? '' : 'none'; }
     vscode.postMessage({
       type: 'saveCompactionSettings',
       method,
-      timeoutSeconds: parseInt(compactionTimeoutInput.value, 10) || 60,
+      timeoutSeconds: compactionTimeoutInput ? (parseInt(compactionTimeoutInput.value, 10) || 60) : 60,
     });
   });
 
@@ -573,6 +600,7 @@
 
   // Helper: update slider value display and save
   function updateTimeoutValue(seconds) {
+    if (!compactionTimeoutInput || !timeoutValueDisplay) { return; }
     compactionTimeoutInput.value = seconds;
     timeoutValueDisplay.textContent = formatTimeout(seconds);
     // Update active preset button
@@ -582,6 +610,7 @@
   }
 
   function saveTimeoutSettings() {
+    if (!compactionMethodGroup || !compactionTimeoutInput) { return; }
     const selectedMethod = compactionMethodGroup.querySelector('input[name="compaction-method"]:checked');
     vscode.postMessage({
       type: 'saveCompactionSettings',
@@ -591,7 +620,8 @@
   }
 
   // Slider real-time feedback
-  compactionTimeoutInput.addEventListener('input', () => {
+  addListener(compactionTimeoutInput, 'input', () => {
+    if (!timeoutValueDisplay) { return; }
     const val = parseInt(compactionTimeoutInput.value, 10) || 60;
     timeoutValueDisplay.textContent = formatTimeout(val);
     document.querySelectorAll('.timeout-preset').forEach(btn => {
@@ -600,7 +630,7 @@
   });
 
   // Slider commit (on release)
-  compactionTimeoutInput.addEventListener('change', () => {
+  addListener(compactionTimeoutInput, 'change', () => {
     saveTimeoutSettings();
   });
 
@@ -613,26 +643,26 @@
     });
   });
 
-  mcpSettingsBtn.addEventListener('click', () => {
+  addListener(mcpSettingsBtn, 'click', () => {
     showView('mcp');
     vscode.postMessage({ type: 'getMcpServers' });
   });
 
   // ===== Context Event Listeners =====
-  contextBackBtn.addEventListener('click', () => {
+  addListener(contextBackBtn, 'click', () => {
     showView('chat');
   });
 
-  addProfileBtn.addEventListener('click', () => {
+  addListener(addProfileBtn, 'click', () => {
     openEditor(null);
   });
 
   // ===== Editor Event Listeners =====
-  editorBackBtn.addEventListener('click', () => {
+  addListener(editorBackBtn, 'click', () => {
     showView('settings');
   });
 
-  profileApiKindSelect.addEventListener('change', () => {
+  addListener(profileApiKindSelect, 'change', () => {
     const kind = profileApiKindSelect.value;
     profileBaseUrlInput.value = DEFAULT_BASE_URLS[kind] || '';
     profileBaseUrlInput.disabled = kind !== 'openai-compatible';
@@ -644,12 +674,12 @@
     profileModelSelect.appendChild(opt);
   });
 
-  toggleKeyBtn.addEventListener('click', () => {
+  addListener(toggleKeyBtn, 'click', () => {
     const isPassword = profileApiKeyInput.type === 'password';
     profileApiKeyInput.type = isPassword ? 'text' : 'password';
   });
 
-  refreshModelsBtn.addEventListener('click', () => {
+  addListener(refreshModelsBtn, 'click', () => {
     const apiKey = profileApiKeyInput.value.trim();
     if (!apiKey) { return; }
     vscode.postMessage({
@@ -667,7 +697,7 @@
     profileModelSelect.appendChild(opt);
   });
 
-  saveProfileBtn.addEventListener('click', () => {
+  addListener(saveProfileBtn, 'click', () => {
     const name = profileNameInput.value.trim();
     if (!name) {
       profileNameInput.focus();
@@ -690,11 +720,11 @@
     });
   });
 
-  cancelProfileBtn.addEventListener('click', () => {
+  addListener(cancelProfileBtn, 'click', () => {
     showView('settings');
   });
 
-  deleteProfileBtn.addEventListener('click', () => {
+  addListener(deleteProfileBtn, 'click', () => {
     if (!editingProfileId) { return; }
     // Simple confirmation
     const profile = profiles.find(function (p) { return p.id === editingProfileId; });
@@ -714,27 +744,27 @@
   });
 
   // ===== MCP Event Listeners =====
-  mcpBackBtn.addEventListener('click', () => {
+  addListener(mcpBackBtn, 'click', () => {
     showView('settings');
   });
 
-  addMcpServerBtn.addEventListener('click', () => {
+  addListener(addMcpServerBtn, 'click', () => {
     openMcpEditor(null);
   });
 
-  editMcpGlobalSettingsBtn.addEventListener('click', () => {
+  addListener(editMcpGlobalSettingsBtn, 'click', () => {
     vscode.postMessage({ type: 'openMcpGlobalSettings' });
   });
 
-  editMcpWorkspaceSettingsBtn.addEventListener('click', () => {
+  addListener(editMcpWorkspaceSettingsBtn, 'click', () => {
     vscode.postMessage({ type: 'openMcpWorkspaceSettings' });
   });
 
-  mcpEditorBackBtn.addEventListener('click', () => {
+  addListener(mcpEditorBackBtn, 'click', () => {
     showView('mcp');
   });
 
-  mcpTransportSelect.addEventListener('change', () => {
+  addListener(mcpTransportSelect, 'change', () => {
     const transport = mcpTransportSelect.value;
     if (transport === 'stdio') {
       mcpStdioGroup.classList.remove('hidden');
@@ -745,7 +775,7 @@
     }
   });
 
-  testMcpBtn.addEventListener('click', () => {
+  addListener(testMcpBtn, 'click', () => {
     const server = buildMcpServerFromForm();
     if (!server.name) {
       mcpNameInput.focus();
@@ -757,7 +787,7 @@
     });
   });
 
-  saveMcpBtn.addEventListener('click', () => {
+  addListener(saveMcpBtn, 'click', () => {
     const server = buildMcpServerFromForm();
     if (!server.name) {
       mcpNameInput.focus();
@@ -769,11 +799,11 @@
     });
   });
 
-  cancelMcpBtn.addEventListener('click', () => {
+  addListener(cancelMcpBtn, 'click', () => {
     showView('mcp');
   });
 
-  deleteMcpBtn.addEventListener('click', () => {
+  addListener(deleteMcpBtn, 'click', () => {
     if (!editingMcpServerId) { return; }
     if (deleteMcpBtn.dataset.confirmed === 'true') {
       vscode.postMessage({ type: 'deleteMcpServer', serverId: editingMcpServerId });
@@ -815,16 +845,16 @@
         break;
       case 'planningModeChanged':
         planningCheckbox.checked = !!message.enabled;
-        planningToggle.classList.toggle('enabled', !!message.enabled);
+        if (planningToggle) { planningToggle.classList.toggle('enabled', !!message.enabled); }
         break;
       case 'exitPlanningModeRequest':
         handleExitPlanningModeRequest(message.reason, message.toolCallId);
         break;
       case 'waitingForApi':
-        apiSpinner.classList.remove('hidden');
+        if (apiSpinner) { apiSpinner.classList.remove('hidden'); }
         break;
       case 'apiResponseStarted':
-        apiSpinner.classList.add('hidden');
+        if (apiSpinner) { apiSpinner.classList.add('hidden'); }
         break;
       case 'streamChunk':
         handleStreamChunk(message.content);
@@ -977,19 +1007,20 @@
         break;
       case 'compactionComplete':
         clearCompactionCountdown();
-        compactionBanner.classList.add('hidden');
+        if (compactionBanner) { compactionBanner.classList.add('hidden'); }
         if (currentView === 'digest') {
           showView('chat');
         }
         break;
       case 'compactionSettings': {
+        if (!compactionMethodGroup) { break; }
         const methodRadio = compactionMethodGroup.querySelector(
           'input[value="' + message.method + '"]'
         );
         if (methodRadio) { methodRadio.checked = true; }
         const timeoutVal = message.timeoutSeconds || 60;
         updateTimeoutValue(timeoutVal);
-        timeoutGroup.style.display = message.method === 'semi-automatic' ? '' : 'none';
+        if (timeoutGroup) { timeoutGroup.style.display = message.method === 'semi-automatic' ? '' : 'none'; }
         break;
       }
     }
