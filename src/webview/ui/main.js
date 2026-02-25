@@ -117,6 +117,7 @@
   // ===== Context View Elements =====
   const contextBackBtn = document.getElementById('context-back-btn');
   const contextSkillsList = document.getElementById('context-skills-list');
+  const contextMemoryList = document.getElementById('context-memory-list');
   const contextAgentsList = document.getElementById('context-agents-list');
 
   // ===== Editor View Elements =====
@@ -192,6 +193,7 @@
   let modes = [];
   let currentModeId = 'sandbox';
   let contextSkills = [];
+  let contextMemoryBanks = [];
   let contextAgentsMd = [];
   let mcpServers = [];
   let editingMcpServerId = null;
@@ -201,11 +203,29 @@
   let abortController = null;
   let fileReferences = []; // Array of relative file paths attached via @
   let autocompleteActive = false;
+  let autocompleteType = null; // 'file' | 'command' | null
   let autocompleteQuery = '';
   let autocompleteStartPos = -1;
   let autocompleteSelectedIndex = 0;
   let searchDebounceTimer = null;
   let currentContextWindow = 0; // Context window size of active model
+
+  const SLASH_COMMANDS = [
+    { command: 'code', description: 'Switch to Code mode for implementation tasks' },
+    { command: 'agent', description: 'Alias for /code' },
+    { command: 'ask', description: 'Switch to Ask mode for direct Q&A' },
+    { command: 'architect', description: 'Switch to Architect mode for high-level design work' },
+    { command: 'debug', description: 'Switch to Debug mode for troubleshooting and fixes' },
+    { command: 'review', description: 'Switch to Review mode for code and risk checks' },
+    { command: 'orchestrator', description: 'Switch to Orchestrator mode for coordination workflows' },
+    { command: 'sandbox', description: 'Switch to Sandbox mode for isolated execution' },
+    { command: 'todo', description: 'Alias for /smart-todo' },
+    { command: 'smart-todo', description: 'Switch to Smart To-Do mode (plan, execute, verify)' },
+    { command: 'sandboxed-smart-todo', description: 'Switch to sandboxed Smart To-Do mode' },
+    { command: 'newtask', description: 'Start a new chat task (optionally with a prompt)' },
+    { command: 'init', description: 'Create or update AGENTS.md for this project' },
+    { command: 'summarize', description: 'Compact the current conversation context' },
+  ];
 
   const DEFAULT_BASE_URLS = {
     anthropic: 'https://api.anthropic.com',
@@ -276,7 +296,9 @@
         e.preventDefault();
         const selected = items[autocompleteSelectedIndex];
         if (selected) {
-          selectAutocompleteItem(selected.dataset.path);
+          selectAutocompleteItem(selected.dataset.value, selected.dataset.kind);
+        } else {
+          closeAutocomplete();
         }
         return;
       }
@@ -455,7 +477,7 @@
   // Auto-resize textarea + autocomplete detection
   addListener(inputEl, 'input', () => {
     autoResizeTextarea();
-    detectFileReference();
+    detectAutocomplete();
   });
 
   // Stop button
@@ -956,6 +978,7 @@
       // Context messages
       case 'context':
         contextSkills = message.skills || [];
+        contextMemoryBanks = message.memoryBanks || [];
         contextAgentsMd = message.agentsMd || [];
         renderContextPanel();
         break;
@@ -983,6 +1006,7 @@
 
       // File reference search results
       case 'fileSearchResults':
+        if (autocompleteType !== 'file') { break; }
         renderAutocompleteResults(message.files || []);
         break;
 
@@ -1693,6 +1717,61 @@
 
   // ===== File Reference Autocomplete =====
 
+  function detectAutocomplete() {
+    if (detectSlashCommand()) {
+      return;
+    }
+    detectFileReference();
+  }
+
+  function detectSlashCommand() {
+    const text = inputEl.value;
+    const cursorPos = inputEl.selectionStart;
+
+    if (cursorPos === null) {
+      closeAutocomplete();
+      return false;
+    }
+
+    const trimmedLeftLength = text.length - text.trimStart().length;
+    if (trimmedLeftLength >= text.length || text[trimmedLeftLength] !== '/') {
+      if (autocompleteType === 'command') {
+        closeAutocomplete();
+      }
+      return false;
+    }
+
+    const firstWhitespaceAfterSlash = text.slice(trimmedLeftLength).search(/\s/);
+    if (firstWhitespaceAfterSlash !== -1) {
+      const commandEndPos = trimmedLeftLength + firstWhitespaceAfterSlash;
+      if (cursorPos > commandEndPos) {
+        if (autocompleteType === 'command') {
+          closeAutocomplete();
+        }
+        return false;
+      }
+    }
+
+    const query = text.slice(trimmedLeftLength + 1, cursorPos).toLowerCase();
+    if (query.includes(' ')) {
+      if (autocompleteType === 'command') {
+        closeAutocomplete();
+      }
+      return false;
+    }
+
+    const matchingCommands = SLASH_COMMANDS.filter(({ command }) => command.startsWith(query));
+
+    autocompleteActive = true;
+    autocompleteType = 'command';
+    autocompleteQuery = query;
+    autocompleteStartPos = trimmedLeftLength;
+    autocompleteSelectedIndex = 0;
+
+    renderCommandAutocompleteResults(matchingCommands);
+    return true;
+  }
+
   function detectFileReference() {
     const text = inputEl.value;
     const cursorPos = inputEl.selectionStart;
@@ -1724,6 +1803,7 @@
     }
 
     autocompleteActive = true;
+    autocompleteType = 'file';
     autocompleteQuery = query;
     autocompleteStartPos = triggerPos;
     autocompleteSelectedIndex = 0;
@@ -1737,16 +1817,54 @@
 
   function closeAutocomplete() {
     autocompleteActive = false;
+    autocompleteType = null;
     autocompleteQuery = '';
     autocompleteStartPos = -1;
     autocompleteDropdown.classList.add('hidden');
     autocompleteDropdown.textContent = '';
   }
 
+  function renderCommandAutocompleteResults(commands) {
+    autocompleteDropdown.textContent = '';
+
+    if (!autocompleteActive || autocompleteType !== 'command' || commands.length === 0) {
+      autocompleteDropdown.classList.add('hidden');
+      return;
+    }
+
+    autocompleteDropdown.classList.remove('hidden');
+    autocompleteSelectedIndex = Math.min(autocompleteSelectedIndex, commands.length - 1);
+
+    for (let i = 0; i < commands.length; i++) {
+      const item = document.createElement('div');
+      item.className = 'autocomplete-item command-autocomplete-item' + (i === autocompleteSelectedIndex ? ' selected' : '');
+      item.dataset.kind = 'command';
+      item.dataset.value = commands[i].command;
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'autocomplete-name';
+      nameEl.textContent = '/' + commands[i].command;
+      item.appendChild(nameEl);
+
+      const descriptionEl = document.createElement('span');
+      descriptionEl.className = 'autocomplete-description';
+      descriptionEl.textContent = commands[i].description;
+      item.appendChild(descriptionEl);
+
+      item.addEventListener('click', () => selectAutocompleteItem(commands[i].command, 'command'));
+      item.addEventListener('mouseenter', () => {
+        autocompleteSelectedIndex = i;
+        updateAutocompleteSelection(autocompleteDropdown.querySelectorAll('.autocomplete-item'));
+      });
+
+      autocompleteDropdown.appendChild(item);
+    }
+  }
+
   function renderAutocompleteResults(files) {
     autocompleteDropdown.textContent = '';
 
-    if (!autocompleteActive || files.length === 0) {
+    if (!autocompleteActive || autocompleteType !== 'file' || files.length === 0) {
       autocompleteDropdown.classList.add('hidden');
       return;
     }
@@ -1757,7 +1875,8 @@
     for (let i = 0; i < files.length; i++) {
       const item = document.createElement('div');
       item.className = 'autocomplete-item' + (i === autocompleteSelectedIndex ? ' selected' : '');
-      item.dataset.path = files[i];
+      item.dataset.kind = 'file';
+      item.dataset.value = files[i];
 
       const fileName = files[i].split('/').pop();
       const dirPath = files[i].includes('/') ? files[i].slice(0, files[i].lastIndexOf('/')) : '';
@@ -1775,7 +1894,7 @@
         item.appendChild(pathEl);
       }
 
-      item.addEventListener('click', () => selectAutocompleteItem(files[i]));
+      item.addEventListener('click', () => selectAutocompleteItem(files[i], 'file'));
       item.addEventListener('mouseenter', () => {
         autocompleteSelectedIndex = i;
         updateAutocompleteSelection(autocompleteDropdown.querySelectorAll('.autocomplete-item'));
@@ -1788,14 +1907,56 @@
   function updateAutocompleteSelection(items) {
     items.forEach((item, i) => {
       item.classList.toggle('selected', i === autocompleteSelectedIndex);
+      if (i === autocompleteSelectedIndex) {
+        item.scrollIntoView({ block: 'nearest' });
+      }
     });
   }
 
-  function selectAutocompleteItem(filePath) {
+  function selectAutocompleteItem(value, kind) {
+    if (kind === 'command') {
+      selectCommandAutocompleteItem(value || '');
+      return;
+    }
+    selectFileAutocompleteItem(value || '');
+  }
+
+  function selectCommandAutocompleteItem(command) {
+    if (!command || autocompleteStartPos < 0) {
+      closeAutocomplete();
+      return;
+    }
+
+    const text = inputEl.value;
+    let commandEnd = autocompleteStartPos + 1;
+    while (commandEnd < text.length && !/\s/.test(text[commandEnd])) {
+      commandEnd++;
+    }
+
+    const before = text.slice(0, autocompleteStartPos);
+    const after = text.slice(commandEnd);
+    const needsSpace = after.length === 0 || !/^\s/.test(after);
+    const updatedBefore = before + '/' + command + (needsSpace ? ' ' : '');
+
+    inputEl.value = updatedBefore + after;
+    const cursorPos = updatedBefore.length;
+    inputEl.setSelectionRange(cursorPos, cursorPos);
+
+    closeAutocomplete();
+    inputEl.focus();
+    autoResizeTextarea();
+  }
+
+  function selectFileAutocompleteItem(filePath) {
+    if (!filePath) {
+      closeAutocomplete();
+      return;
+    }
+
     // Replace the @query text with just @filename (keep it readable)
     const text = inputEl.value;
     const before = text.slice(0, autocompleteStartPos);
-    const after = text.slice(inputEl.selectionStart);
+    const after = text.slice(inputEl.selectionStart || 0);
     const fileName = filePath.split('/').pop();
     inputEl.value = before + '@' + fileName + ' ' + after;
 
@@ -2675,6 +2836,7 @@
 
   function renderContextPanel() {
     renderSkillsList();
+    renderMemoryBanksList();
     renderAgentsList();
   }
 
@@ -2781,6 +2943,47 @@
       card.appendChild(preview);
 
       contextAgentsList.appendChild(card);
+    }
+  }
+
+  function renderMemoryBanksList() {
+    if (!contextMemoryList) { return; }
+    contextMemoryList.textContent = '';
+
+    if (contextMemoryBanks.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'settings-empty';
+      empty.textContent = 'No memory bank files found (.yolo-agent/.kilo/.kilocode/.claude memory-bank.md)';
+      contextMemoryList.appendChild(empty);
+      return;
+    }
+
+    for (const memory of contextMemoryBanks) {
+      const card = document.createElement('div');
+      card.className = 'context-card';
+
+      const header = document.createElement('div');
+      header.className = 'context-card-header';
+
+      const name = document.createElement('strong');
+      name.className = 'context-name';
+      name.textContent = memory.projectName;
+
+      const path = document.createElement('div');
+      path.className = 'context-path';
+      path.textContent = memory.path;
+
+      header.appendChild(name);
+      card.appendChild(header);
+      card.appendChild(path);
+
+      const preview = document.createElement('div');
+      preview.className = 'context-preview';
+      const lines = memory.content.split('\n').slice(0, 5).join('\n');
+      preview.textContent = lines + (memory.content.split('\n').length > 5 ? '\n...' : '');
+      card.appendChild(preview);
+
+      contextMemoryList.appendChild(card);
     }
   }
 

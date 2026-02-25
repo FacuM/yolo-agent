@@ -6,7 +6,7 @@ A VS Code coding agent powered by multiple AI providers. YOLO Agent gives you an
 >
 >The whole idea behind this project is that most of the cheaper models DO eventually get to the right answer, but they need a lot of tries and some help from the user to get there. So I wanted to build a tool that makes it easy to have that back-and-forth interaction, where the model can ask for clarification, you can give it feedback, and it can iteratively improve its output until it's good enough. It uses a TODO system and asks the model to update the TODOs based on its own feedback, asking the model to clarify specifically what was implemented over and over until it gets it right. It's a bit like having a pair programming partner that doesn't get frustrated and can keep trying until it gets it right.
 >
->100% of the code in this repo was written by **Claude Opus 4.6** and **Z.ai's GLM 5 using Kilo Code**. I just stitched it together and added some glue code here and there. So if you find any issues or have suggestions, please keep in mind that it's not a polished product, but rather a fun experiment that I'm sharing with the world. Thanks for understanding!
+>100% of the code in this repo was written by **Claude Opus 4.6**, **GPT-5.3-Codex** and **Z.ai's GLM-5 using Kilo Code**. I just stitched it together and added some glue code here and there. So if you find any issues or have suggestions, please keep in mind that it's not a polished product, but rather a fun experiment that I'm sharing with the world. Thanks for understanding!
 
 ## Features
 
@@ -14,15 +14,20 @@ A VS Code coding agent powered by multiple AI providers. YOLO Agent gives you an
 - **Multiple modes**
   - **Sandboxed Smart To-Do** *(default)* — Iterative plan → execute → verify loop with OS-level sandbox isolation.
   - **Smart To-Do** — Same iterative loop without sandboxing.
+  - **Code** — Full autonomy with all tools.
+  - **Architect** — Design/planning-focused read-only strategy mode.
+  - **Debug** — Systematic troubleshooting and targeted fixes.
+  - **Review** — Read-focused code review and risk analysis.
+  - **Orchestrator** — Task decomposition and mode-switch coordination.
   - **Sandbox Orchestrator** — Isolated development with git worktrees and OS-level restrictions.
-  - **Agent** — Full autonomy with all tools.
-  - **Plan** — Read-only exploration and planning.
   - **Ask** — Chat only, no tool execution.
+- **Slash commands** — Quick commands like `/debug`, `/review`, `/architect`, `/init`, `/summarize`, and `/newtask`.
 - **Tool system** — Read/write files, run terminal commands, fetch diagnostics, manage sandboxes.
 - **MCP integration** — Connect to Model Context Protocol servers for additional tools.
-- **Context awareness** — Automatically discovers skills from `.kilo/`, `.claude/`, `.cline/` directories and `AGENTS.md` files.
+- **Context awareness** — Automatically discovers skills, context files, and memory bank markdown.
 - **Multi-session** — Run multiple agent sessions in the background and switch between them.
 - **Model selector** — Switch models on the fly from the top bar.
+- **Kilo Auto Model routing** — `kilo/auto` now passes mode-aware routing hints to Kilo Gateway.
 
 ## Getting Started
 

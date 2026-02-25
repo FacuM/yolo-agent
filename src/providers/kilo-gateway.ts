@@ -53,6 +53,19 @@ export class KiloGatewayProvider implements LLMProvider {
       },
     }));
 
+    const requestOptions: Record<string, unknown> = {};
+    if (options.signal) {
+      requestOptions.signal = options.signal;
+    }
+
+    // Kilo Auto Model can route by mode when x-kilocode-mode is provided.
+    if (options.model === 'kilo/auto') {
+      const mode = this.toKiloMode(options.modeId);
+      if (mode) {
+        requestOptions.headers = { 'x-kilocode-mode': mode };
+      }
+    }
+
     const stream = await this.client.chat.completions.create({
       model: options.model,
       max_tokens: options.maxTokens ?? 4096,
@@ -60,7 +73,7 @@ export class KiloGatewayProvider implements LLMProvider {
       messages: openaiMessages,
       tools: tools?.length ? tools : undefined,
       stream: true,
-    });
+    }, requestOptions);
 
     let fullContent = '';
     let reasoningContent = '';
@@ -151,6 +164,14 @@ export class KiloGatewayProvider implements LLMProvider {
           supportsStreaming: true,
         });
       }
+      if (!models.some((m) => m.id === 'kilo/auto')) {
+        models.unshift({
+          id: 'kilo/auto',
+          name: 'kilo/auto (Auto Model Routing)',
+          supportsTools: true,
+          supportsStreaming: true,
+        });
+      }
       return models;
     } catch {
       return [];
@@ -205,5 +226,27 @@ export class KiloGatewayProvider implements LLMProvider {
       role: msg.role,
       content: msg.content,
     };
+  }
+
+  private toKiloMode(modeId?: string): string | undefined {
+    if (!modeId) {
+      return undefined;
+    }
+
+    switch (modeId) {
+      case 'agent':
+      case 'sandbox':
+      case 'smart-todo':
+      case 'sandboxed-smart-todo':
+        return 'code';
+      case 'ask':
+      case 'architect':
+      case 'debug':
+      case 'review':
+      case 'orchestrator':
+        return modeId;
+      default:
+        return undefined;
+    }
   }
 }

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { Skill, AgentsMd } from './types';
+import { Skill, AgentsMd, MemoryBank } from './types';
 
 /**
  * Parses YAML frontmatter from markdown content
@@ -53,6 +53,7 @@ function parseFrontmatter(content: string): { frontmatter: Record<string, unknow
 export class ContextScanner {
   private skills: Map<string, Skill> = new Map();
   private agentsMdFiles: Map<string, AgentsMd> = new Map();
+  private memoryBankFiles: Map<string, MemoryBank> = new Map();
   private contextWatchers: vscode.FileSystemWatcher[] = [];
   private skillsWatchers: vscode.FileSystemWatcher[] = [];
   private _onDidChangeContext = new vscode.EventEmitter<void>();
@@ -77,6 +78,7 @@ export class ContextScanner {
     await Promise.all([
       this.scanSkillsDirectory(),
       this.scanAgentsMdFiles(),
+      this.scanMemoryBankFiles(),
     ]);
   }
 
@@ -180,6 +182,44 @@ export class ContextScanner {
   }
 
   /**
+   * Scan for persistent memory-bank markdown files.
+   * Common locations:
+   * - .yolo-agent/memory-bank.md
+   * - .kilo/memory-bank.md
+   * - .kilocode/memory-bank.md
+   * - .claude/memory-bank.md
+   * - hidden-directory memory bank files (for example, ".foo/memory-bank/*.md")
+   */
+  private async scanMemoryBankFiles(): Promise<void> {
+    if (!this.workspaceFolder) {
+      return;
+    }
+
+    const patterns = [
+      new vscode.RelativePattern(this.workspaceFolder, '**/.yolo-agent/memory-bank.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.kilo/memory-bank.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.kilocode/memory-bank.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.claude/memory-bank.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.cline/memory-bank.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/.*/memory-bank/*.md'),
+      new vscode.RelativePattern(this.workspaceFolder, '**/memory-bank.md'),
+    ];
+
+    this.memoryBankFiles.clear();
+
+    for (const pattern of patterns) {
+      try {
+        const files = await vscode.workspace.findFiles(pattern, '**/node_modules/**');
+        for (const file of files) {
+          await this.loadMemoryBankFile(file);
+        }
+      } catch {
+        // Ignore missing pattern matches.
+      }
+    }
+  }
+
+  /**
    * Load a single AGENTS.md file
    */
   private async loadAgentsMdFile(uri: vscode.Uri): Promise<void> {
@@ -202,6 +242,28 @@ export class ContextScanner {
   }
 
   /**
+   * Load a single memory-bank markdown file.
+   */
+  private async loadMemoryBankFile(uri: vscode.Uri): Promise<void> {
+    try {
+      const content = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf-8');
+      const relativePath = vscode.workspace.asRelativePath(uri);
+      const pathParts = relativePath.split(path.sep);
+      const projectName = pathParts.length > 1 ? pathParts[0] : this.workspaceFolder?.name || 'Project';
+
+      const memoryBank: MemoryBank = {
+        path: uri.fsPath,
+        content,
+        projectName,
+      };
+
+      this.memoryBankFiles.set(uri.fsPath, memoryBank);
+    } catch (err) {
+      console.error(`Failed to load memory bank file ${uri.fsPath}:`, err);
+    }
+  }
+
+  /**
    * Get all discovered skills
    */
   getSkills(): Skill[] {
@@ -213,6 +275,13 @@ export class ContextScanner {
    */
   getAgentsMdFiles(): AgentsMd[] {
     return Array.from(this.agentsMdFiles.values());
+  }
+
+  /**
+   * Get discovered memory-bank files.
+   */
+  getMemoryBankFiles(): MemoryBank[] {
+    return Array.from(this.memoryBankFiles.values());
   }
 
   /**
@@ -259,6 +328,9 @@ export class ContextScanner {
       '**/{A,a}gents.md',
       '.github/**/*.md',
       '.*/rules/**/*.md',
+      '.*/memory-bank.md',
+      '.*/memory-bank/*.md',
+      '**/memory-bank.md',
     ];
 
     for (const pattern of contextPatterns) {
@@ -267,17 +339,26 @@ export class ContextScanner {
       );
 
       watcher.onDidCreate(async (uri) => {
-        await this.loadAgentsMdFile(uri);
+        if (/memory-bank/i.test(uri.fsPath)) {
+          await this.loadMemoryBankFile(uri);
+        } else {
+          await this.loadAgentsMdFile(uri);
+        }
         this._onDidChangeContext.fire();
       });
 
       watcher.onDidChange(async (uri) => {
-        await this.loadAgentsMdFile(uri);
+        if (/memory-bank/i.test(uri.fsPath)) {
+          await this.loadMemoryBankFile(uri);
+        } else {
+          await this.loadAgentsMdFile(uri);
+        }
         this._onDidChangeContext.fire();
       });
 
       watcher.onDidDelete((uri) => {
         this.agentsMdFiles.delete(uri.fsPath);
+        this.memoryBankFiles.delete(uri.fsPath);
         this._onDidChangeContext.fire();
       });
 

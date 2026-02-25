@@ -561,7 +561,99 @@ Keep each section compact and information-dense. This summary will replace the f
     }
   }
 
+  private static readonly SLASH_MODE_MAP: Record<string, ModeId> = {
+    code: 'agent',
+    agent: 'agent',
+    ask: 'ask',
+    architect: 'architect',
+    debug: 'debug',
+    review: 'review',
+    orchestrator: 'orchestrator',
+    sandbox: 'sandbox',
+    todo: 'smart-todo',
+    'smart-todo': 'smart-todo',
+    'sandboxed-smart-todo': 'sandboxed-smart-todo',
+  };
+
+  private buildInitCommandPrompt(commandArg: string): string {
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? 'this workspace';
+    const extraInstructions = commandArg ? `\n${commandArg}\n` : '';
+    return `Please analyze this codebase and create an AGENTS.md file containing:
+1. Build/lint/test commands - especially for running a single test
+2. Code style guidelines including imports, formatting, types, naming conventions, error handling, etc.
+
+The file you create will be given to agentic coding agents (such as yourself) that operate in this repository. Make it about 150 lines long.
+If there are Cursor rules (in .cursor/rules/ or .cursorrules) or Copilot rules (in .github/copilot-instructions.md), make sure to include them.
+
+If there's already an AGENTS.md, improve it if it's located in ${workspacePath}
+${extraInstructions}`;
+  }
+
+  private async handleSlashCommand(
+    text: string,
+    fileReferences?: string[],
+  ): Promise<boolean> {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('/')) {
+      return false;
+    }
+
+    const commandToken = trimmed.slice(1).split(/\s+/, 1)[0].toLowerCase();
+    const commandArg = trimmed.slice(commandToken.length + 2).trim();
+
+    if (commandToken === 'summarize') {
+      await this.handleCompactContext();
+      return true;
+    }
+
+    if (commandToken === 'newtask') {
+      this.handleNewChat();
+      if (commandArg) {
+        await this.handleSendMessage(commandArg, undefined, fileReferences);
+      }
+      return true;
+    }
+
+    if (commandToken === 'init') {
+      const initPrompt = this.buildInitCommandPrompt(commandArg);
+      await this.handleSendMessage(initPrompt, undefined, fileReferences);
+      return true;
+    }
+
+    const targetMode = ChatViewProvider.SLASH_MODE_MAP[commandToken];
+    if (!targetMode) {
+      return false;
+    }
+
+    await this.modeManager.setCurrentMode(targetMode);
+    this.postMessage({
+      type: 'modeChanged',
+      mode: this.modeManager.getCurrentMode(),
+    });
+
+    if (commandArg) {
+      await this.handleSendMessage(commandArg, undefined, fileReferences);
+    }
+    return true;
+  }
+
   private async handleSendMessage(text: string, signal?: unknown, fileReferences?: string[]): Promise<void> {
+    // If the assistant is waiting on askQuestion, treat this as the answer
+    // before parsing slash commands.
+    const askTool = this.tools.get('askQuestion');
+    if (askTool && (askTool as unknown as AskQuestionTool).hasPendingQuestion()) {
+      const activeSessionId = this.sessionManager.getActiveSessionId();
+      if (activeSessionId) {
+        this.postSessionMessage(activeSessionId, { type: 'questionAnswered' });
+      }
+      (askTool as unknown as AskQuestionTool).resolveAnswer(text);
+      return;
+    }
+
+    if (await this.handleSlashCommand(text, fileReferences)) {
+      return;
+    }
+
     const provider = this.registry.getActiveProvider();
     if (!provider) {
       this.postMessage({
@@ -637,16 +729,6 @@ IMPORTANT RULES:
       }
 
       await this.runSmartTodoFlow(sessionId, text, fileReferences);
-      return;
-    }
-
-    // --- Check for pending askQuestion tool ---
-    const askTool = this.tools.get('askQuestion');
-    if (askTool && (askTool as unknown as AskQuestionTool).hasPendingQuestion()) {
-      // The user is answering a question the LLM asked via the askQuestion tool.
-      // Show the answer in the webview and resolve the pending promise.
-      this.postSessionMessage(sessionId, { type: 'questionAnswered' });
-      (askTool as unknown as AskQuestionTool).resolveAnswer(text);
       return;
     }
 
@@ -752,7 +834,12 @@ IMPORTANT RULES:
     let firstChunkReceived = false;
     try {
       const model = this.registry.getActiveModelId();
-      const requestOpts = { model, tools: allowedTools, signal: abortCtrl.signal };
+      const requestOpts = {
+        model,
+        tools: allowedTools,
+        signal: abortCtrl.signal,
+        modeId: this.modeManager.getCurrentMode().id,
+      };
       const onChunk = (chunk: string) => {
         if (!firstChunkReceived) {
           firstChunkReceived = true;
@@ -1139,7 +1226,11 @@ IMPORTANT RULES:
 
       const response = await provider.sendMessage(
         messages,
-        { model, signal: abortCtrl.signal },  // no tools!
+        {
+          model,
+          signal: abortCtrl.signal,
+          modeId: this.modeManager.getCurrentMode().id,
+        },  // no tools!
         (chunk) => {
           if (!firstChunkReceived) {
             firstChunkReceived = true;
@@ -2196,6 +2287,7 @@ IMPORTANT RULES:
       type: 'context',
       skills: context.skills,
       agentsMd: context.agentsMd,
+      memoryBanks: context.memoryBanks,
     });
   }
 
@@ -2548,7 +2640,11 @@ IMPORTANT RULES:
           { role: 'system', content: ChatViewProvider.COMPACTION_PROMPT },
           { role: 'user', content: `Here is the conversation to summarize:\n\n${editedDigest}` },
         ],
-        { model, maxTokens: 2048 },
+        {
+          model,
+          maxTokens: 2048,
+          modeId: this.modeManager.getCurrentMode().id,
+        },
         () => {} // No streaming needed for compaction
       );
 
@@ -2884,6 +2980,10 @@ IMPORTANT RULES:
         <div id="context-skills-section">
           <h3>Skills</h3>
           <div id="context-skills-list"></div>
+        </div>
+        <div id="context-memory-section">
+          <h3>Memory Bank</h3>
+          <div id="context-memory-list"></div>
         </div>
         <div id="context-agents-section">
           <h3>Context Files</h3>

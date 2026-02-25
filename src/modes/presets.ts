@@ -1,6 +1,17 @@
 import { Mode, ModeId, BuiltinMode } from './types';
 
-export const BUILT_IN_MODES: Record<'sandboxed-smart-todo' | 'smart-todo' | 'sandbox' | 'agent' | 'ask', BuiltinMode> = {
+export const BUILT_IN_MODES: Record<
+  | 'sandboxed-smart-todo'
+  | 'smart-todo'
+  | 'sandbox'
+  | 'agent'
+  | 'ask'
+  | 'architect'
+  | 'debug'
+  | 'review'
+  | 'orchestrator',
+  BuiltinMode
+> = {
   'sandboxed-smart-todo': {
     id: 'sandboxed-smart-todo' as const,
     name: 'Sandboxed Smart To-Do',
@@ -87,7 +98,7 @@ export const BUILT_IN_MODES: Record<'sandboxed-smart-todo' | 'smart-todo' | 'san
   },
   agent: {
     id: 'agent' as const,
-    name: 'Agent',
+    name: 'Code',
     description: 'Full autonomy - can use all tools',
     systemPrompt: `You are an AI coding assistant with access to tools.
 
@@ -127,6 +138,120 @@ Git safety:
       runBackgroundTerminal: 'allow',
       getBackgroundTerminal: 'allow',
       getDiagnostics: 'allow',
+    },
+    isBuiltIn: true,
+  },
+  architect: {
+    id: 'architect' as const,
+    name: 'Architect',
+    description: 'Design-first mode for planning architecture and implementation strategy',
+    systemPrompt: `You are a senior software architect focused on design quality, sequencing, and risk reduction.
+
+Core behavior:
+- Prioritize understanding the existing codebase before proposing changes.
+- Break work into concrete implementation steps with exact file paths.
+- Call out assumptions, risks, migration concerns, and verification strategy.
+- Do not write code unless the user explicitly asks you to switch to an implementation mode.
+
+Output style:
+- Be structured and specific.
+- Prefer tradeoff-driven recommendations over generic advice.
+- Keep plans actionable and constrained to what the user asked.`,
+    toolPermissions: {
+      readFile: 'allow',
+      writeFile: 'deny',
+      listFiles: 'allow',
+      runTerminal: 'deny',
+      runBackgroundTerminal: 'deny',
+      getBackgroundTerminal: 'deny',
+      getDiagnostics: 'allow',
+      askQuestion: 'allow',
+      switchMode: 'allow',
+    },
+    isBuiltIn: true,
+  },
+  debug: {
+    id: 'debug' as const,
+    name: 'Debug',
+    description: 'Systematic troubleshooting mode for reproducing and fixing bugs',
+    systemPrompt: `You are a debugging specialist. Work methodically and evidence-first.
+
+Debug workflow:
+1. Reproduce the issue.
+2. Narrow the root cause with concrete evidence.
+3. Apply the smallest safe fix.
+4. Verify with diagnostics/tests and report remaining risk.
+
+Rules:
+- Prefer measurable signals (error logs, diagnostics, test output) over guesses.
+- Keep fixes minimal and targeted.
+- If a fix is uncertain, present the uncertainty explicitly before proceeding.`,
+    toolPermissions: {
+      readFile: 'allow',
+      writeFile: 'allow',
+      listFiles: 'allow',
+      runTerminal: 'allow',
+      runBackgroundTerminal: 'allow',
+      getBackgroundTerminal: 'allow',
+      getDiagnostics: 'allow',
+      askQuestion: 'allow',
+      switchMode: 'allow',
+    },
+    isBuiltIn: true,
+  },
+  review: {
+    id: 'review' as const,
+    name: 'Review',
+    description: 'Read-focused review mode for code quality and risk assessment',
+    systemPrompt: `You are an expert code reviewer.
+
+Primary objective:
+- Find correctness bugs, security issues, behavioral regressions, and missing tests.
+
+Review style:
+- Prioritize findings by severity.
+- Cite exact file paths and line references when possible.
+- Keep summaries brief after listing findings.
+
+Do not modify files unless the user explicitly asks you to switch to an implementation mode.`,
+    toolPermissions: {
+      readFile: 'allow',
+      writeFile: 'deny',
+      listFiles: 'allow',
+      runTerminal: 'deny',
+      runBackgroundTerminal: 'deny',
+      getBackgroundTerminal: 'deny',
+      getDiagnostics: 'allow',
+      askQuestion: 'allow',
+      switchMode: 'allow',
+    },
+    isBuiltIn: true,
+  },
+  orchestrator: {
+    id: 'orchestrator' as const,
+    name: 'Orchestrator',
+    description: 'Coordinates complex work by sequencing tasks and mode switches',
+    systemPrompt: `You are a workflow orchestrator for complex engineering tasks.
+
+Responsibilities:
+- Decompose goals into focused sub-tasks.
+- Decide the right mode for each sub-task and switch modes deliberately.
+- Keep execution ordered and avoid duplicate work.
+- Maintain a concise running status and next actions.
+
+Constraints:
+- Avoid direct implementation unless explicitly requested.
+- Favor delegation and sequencing over deep execution in this mode.`,
+    toolPermissions: {
+      readFile: 'allow',
+      writeFile: 'deny',
+      listFiles: 'allow',
+      runTerminal: 'deny',
+      runBackgroundTerminal: 'deny',
+      getBackgroundTerminal: 'deny',
+      getDiagnostics: 'allow',
+      askQuestion: 'allow',
+      switchMode: 'allow',
     },
     isBuiltIn: true,
   },

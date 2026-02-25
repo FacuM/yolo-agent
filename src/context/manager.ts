@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ContextScanner } from './scanner';
-import { Skill, AgentsMd, ContextInjection } from './types';
+import { Skill, AgentsMd, MemoryBank, ContextInjection } from './types';
 
 /**
  * Manages context from skills and AGENTS.md files
@@ -10,6 +10,7 @@ export class ContextManager {
   private scanner: ContextScanner;
   private skills: Map<string, Skill> = new Map();
   private agentsMdFiles: Map<string, AgentsMd> = new Map();
+  private memoryBanks: Map<string, MemoryBank> = new Map();
 
   constructor() {
     this.scanner = new ContextScanner();
@@ -56,6 +57,12 @@ export class ContextManager {
     for (const agentsMd of this.scanner.getAgentsMdFiles()) {
       this.agentsMdFiles.set(agentsMd.path, agentsMd);
     }
+
+    // Update memory bank files
+    this.memoryBanks.clear();
+    for (const memoryBank of this.scanner.getMemoryBankFiles()) {
+      this.memoryBanks.set(memoryBank.path, memoryBank);
+    }
   }
 
   /**
@@ -77,6 +84,13 @@ export class ContextManager {
    */
   getAgentsMdFiles(): AgentsMd[] {
     return Array.from(this.agentsMdFiles.values());
+  }
+
+  /**
+   * Get all discovered memory-bank files.
+   */
+  getMemoryBanks(): MemoryBank[] {
+    return Array.from(this.memoryBanks.values());
   }
 
   /**
@@ -150,6 +164,7 @@ export class ContextManager {
   getSystemPromptAddition(userMessage?: string): string {
     const enabledSkills = this.getEnabledSkills();
     const agentsMdFiles = this.getAgentsMdFiles();
+    const memoryBanks = this.getMemoryBanks();
 
     const parts: string[] = [];
     let totalChars = 0;
@@ -162,6 +177,16 @@ export class ContextManager {
       totalChars += text.length;
       return true;
     };
+
+    // Add memory bank context first so long-lived project facts are always visible.
+    if (memoryBanks.length > 0) {
+      addPart('## Memory Bank (Persistent Project Knowledge)\n');
+      for (const memoryBank of memoryBanks) {
+        const header = `### ${memoryBank.projectName} (${memoryBank.path})`;
+        const body = memoryBank.content.slice(0, ContextManager.MAX_SINGLE_FILE_CHARS);
+        if (!addPart(header + '\n' + body + '\n')) { break; }
+      }
+    }
 
     // Partition skills into triggered (full content) vs. indexed (summary only)
     const triggeredSkills: Skill[] = [];
@@ -223,6 +248,7 @@ export class ContextManager {
       systemPromptAddition: this.getSystemPromptAddition(),
       skills: this.getSkills(),
       agentsMd: this.getAgentsMdFiles(),
+      memoryBanks: this.getMemoryBanks(),
     };
   }
 

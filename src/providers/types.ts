@@ -31,6 +31,8 @@ export interface RequestOptions {
   temperature?: number;
   tools?: ToolDefinition[];
   signal?: AbortSignal;
+  /** Active mode hint (used by providers that support mode-aware routing). */
+  modeId?: string;
 }
 
 export interface LLMResponse {

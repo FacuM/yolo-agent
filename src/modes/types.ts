@@ -1,4 +1,14 @@
-export type ModeId = 'sandbox' | 'agent' | 'ask' | 'smart-todo' | 'sandboxed-smart-todo' | 'custom';
+export type ModeId =
+  | 'sandbox'
+  | 'agent'
+  | 'ask'
+  | 'architect'
+  | 'debug'
+  | 'review'
+  | 'orchestrator'
+  | 'smart-todo'
+  | 'sandboxed-smart-todo'
+  | 'custom';
 
 export type ToolPermission = 'allow' | 'deny' | 'read-only';
 
@@ -11,7 +21,16 @@ export interface BaseMode {
 }
 
 export interface BuiltinMode extends BaseMode {
-  id: 'sandbox' | 'agent' | 'ask' | 'smart-todo' | 'sandboxed-smart-todo';
+  id:
+    | 'sandbox'
+    | 'agent'
+    | 'ask'
+    | 'architect'
+    | 'debug'
+    | 'review'
+    | 'orchestrator'
+    | 'smart-todo'
+    | 'sandboxed-smart-todo';
   isBuiltIn: true;
   toolPermissions: Record<string, ToolPermission>;
 }

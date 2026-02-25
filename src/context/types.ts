@@ -29,6 +29,18 @@ export interface AgentsMd {
 }
 
 /**
+ * Represents a memory bank markdown file discovered in the workspace.
+ */
+export interface MemoryBank {
+  /** Absolute path to the memory bank file */
+  path: string;
+  /** Full markdown content */
+  content: string;
+  /** Project/folder label */
+  projectName: string;
+}
+
+/**
  * The formatted context injection for the system prompt
  */
 export interface ContextInjection {
@@ -38,4 +50,6 @@ export interface ContextInjection {
   skills: Skill[];
   /** All discovered AGENTS.md files */
   agentsMd: AgentsMd[];
+  /** All discovered memory-bank files */
+  memoryBanks: MemoryBank[];
 }
