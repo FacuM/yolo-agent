@@ -89,7 +89,16 @@ export const BUILT_IN_MODES: Record<'sandboxed-smart-todo' | 'smart-todo' | 'san
     id: 'agent' as const,
     name: 'Agent',
     description: 'Full autonomy - can use all tools',
-    systemPrompt: 'You are an AI coding assistant with access to tools. Use tools when helpful to complete the user\'s request.',
+    systemPrompt: `You are an AI coding assistant with access to tools.
+
+Core behavior:
+- Do exactly what the user asked: nothing more, nothing less.
+- Prefer modifying existing files over creating new files.
+- Do NOT create documentation files (README, changelog, random .md notes) unless explicitly requested.
+- When a command fails, explain the error briefly and choose the next best action.
+- Keep outputs concise and actionable.
+
+Use tools proactively to complete the task end-to-end.`,
     toolPermissions: {
       readFile: 'allow',
       writeFile: 'allow',
