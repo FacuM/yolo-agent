@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ContextScanner } from './scanner';
-import { Skill, AgentsMd, MemoryBank, ContextInjection } from './types';
+import { Skill, AgentsMd, MemoryBank, ContextInjection, ContextPromptOptions } from './types';
 
 /**
  * Manages context from skills and AGENTS.md files
@@ -161,10 +161,16 @@ export class ContextManager {
    *
    * @param userMessage — The current user message (used for keyword matching)
    */
-  getSystemPromptAddition(userMessage?: string): string {
-    const enabledSkills = this.getEnabledSkills();
-    const agentsMdFiles = this.getAgentsMdFiles();
-    const memoryBanks = this.getMemoryBanks();
+  getSystemPromptAddition(userMessage?: string, options?: Partial<ContextPromptOptions>): string {
+    const normalizedOptions: ContextPromptOptions = {
+      includeSkills: options?.includeSkills ?? true,
+      includeAgentsMd: options?.includeAgentsMd ?? true,
+      includeMemoryBanks: options?.includeMemoryBanks ?? true,
+    };
+
+    const enabledSkills = normalizedOptions.includeSkills ? this.getEnabledSkills() : [];
+    const agentsMdFiles = normalizedOptions.includeAgentsMd ? this.getAgentsMdFiles() : [];
+    const memoryBanks = normalizedOptions.includeMemoryBanks ? this.getMemoryBanks() : [];
 
     const parts: string[] = [];
     let totalChars = 0;

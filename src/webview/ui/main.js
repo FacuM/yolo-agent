@@ -159,6 +159,18 @@
   const compactionTimeoutInput = /** @type {HTMLInputElement} */ (document.getElementById('compaction-timeout'));
   const timeoutValueDisplay = document.getElementById('timeout-value');
   const timeoutGroup = document.getElementById('timeout-group');
+  const settingEnableSlashAutocomplete = /** @type {HTMLInputElement} */ (document.getElementById('setting-enable-slash-autocomplete'));
+  const settingEnableFileAutocomplete = /** @type {HTMLInputElement} */ (document.getElementById('setting-enable-file-autocomplete'));
+  const settingEnableCommandQueue = /** @type {HTMLInputElement} */ (document.getElementById('setting-enable-command-queue'));
+  const settingShowContextTracker = /** @type {HTMLInputElement} */ (document.getElementById('setting-show-context-tracker'));
+  const settingActiveFileDefault = /** @type {HTMLInputElement} */ (document.getElementById('setting-active-file-default'));
+  const settingPlanningDefault = /** @type {HTMLInputElement} */ (document.getElementById('setting-planning-default'));
+  const settingIncludeSkills = /** @type {HTMLInputElement} */ (document.getElementById('setting-include-skills'));
+  const settingIncludeAgentsMd = /** @type {HTMLInputElement} */ (document.getElementById('setting-include-agents-md'));
+  const settingIncludeMemoryBank = /** @type {HTMLInputElement} */ (document.getElementById('setting-include-memory-bank'));
+  const settingMaxToolIterations = /** @type {HTMLInputElement} */ (document.getElementById('setting-max-tool-iterations'));
+  const settingCompactionThreshold = /** @type {HTMLInputElement} */ (document.getElementById('setting-compaction-threshold'));
+  const settingCompactionThresholdValue = document.getElementById('setting-compaction-threshold-value');
 
   // ===== MCP View Elements =====
   const mcpBackBtn = document.getElementById('mcp-back-btn');
@@ -209,6 +221,25 @@
   let autocompleteSelectedIndex = 0;
   let searchDebounceTimer = null;
   let currentContextWindow = 0; // Context window size of active model
+  let featureSettings = {
+    chat: {
+      enableSlashCommandAutocomplete: true,
+      enableFileReferenceAutocomplete: true,
+      enableCommandQueue: true,
+      showContextTracker: true,
+      activeFileByDefault: false,
+      planningModeByDefault: false,
+    },
+    context: {
+      includeSkills: true,
+      includeAgentsMd: true,
+      includeMemoryBank: true,
+      compactionThresholdPercent: 80,
+    },
+    agent: {
+      maxToolIterations: 25,
+    },
+  };
 
   const SLASH_COMMANDS = [
     { command: 'code', description: 'Switch to Code mode for implementation tasks' },
@@ -239,6 +270,7 @@
   vscode.postMessage({ type: 'getModes' });
   vscode.postMessage({ type: 'getContext' });
   vscode.postMessage({ type: 'getMcpServers' });
+  vscode.postMessage({ type: 'getFeatureSettings' });
 
   // ===== Chat Event Listeners =====
   addListener(sendBtn, 'click', sendMessage);
@@ -467,6 +499,7 @@
   addListener(settingsBtn, 'click', () => {
     showView('settings');
     vscode.postMessage({ type: 'getCompactionSettings' });
+    vscode.postMessage({ type: 'getFeatureSettings' });
   });
 
   addListener(contextBtn, 'click', () => {
@@ -498,6 +531,7 @@
 
   // Context tracker click — trigger compaction
   addListener(contextTracker, 'click', () => {
+    if (!featureSettings.chat.showContextTracker) { return; }
     vscode.postMessage({ type: 'compactContext' });
   });
 
@@ -598,6 +632,7 @@
       vscode.postMessage({ type: 'getMcpServers' });
     } else if (tabId === 'general') {
       vscode.postMessage({ type: 'getCompactionSettings' });
+      vscode.postMessage({ type: 'getFeatureSettings' });
     }
   });
 
@@ -663,6 +698,46 @@
       updateTimeoutValue(val);
       saveTimeoutSettings();
     });
+  });
+
+  function saveFeatureSetting(key, value) {
+    vscode.postMessage({ type: 'updateFeatureSetting', key, value });
+  }
+
+  function bindBooleanSetting(inputElRef, key) {
+    if (!inputElRef) { return; }
+    addListener(inputElRef, 'change', () => {
+      saveFeatureSetting(key, !!inputElRef.checked);
+    });
+  }
+
+  bindBooleanSetting(settingEnableSlashAutocomplete, 'chat.enableSlashCommandAutocomplete');
+  bindBooleanSetting(settingEnableFileAutocomplete, 'chat.enableFileReferenceAutocomplete');
+  bindBooleanSetting(settingEnableCommandQueue, 'chat.enableCommandQueue');
+  bindBooleanSetting(settingShowContextTracker, 'chat.showContextTracker');
+  bindBooleanSetting(settingActiveFileDefault, 'chat.activeFileByDefault');
+  bindBooleanSetting(settingPlanningDefault, 'chat.planningModeByDefault');
+  bindBooleanSetting(settingIncludeSkills, 'context.includeSkills');
+  bindBooleanSetting(settingIncludeAgentsMd, 'context.includeAgentsMd');
+  bindBooleanSetting(settingIncludeMemoryBank, 'context.includeMemoryBank');
+
+  addListener(settingMaxToolIterations, 'change', () => {
+    if (!settingMaxToolIterations) { return; }
+    const value = parseInt(settingMaxToolIterations.value, 10);
+    if (!Number.isFinite(value)) { return; }
+    saveFeatureSetting('agent.maxToolIterations', value);
+  });
+
+  addListener(settingCompactionThreshold, 'input', () => {
+    if (!settingCompactionThreshold || !settingCompactionThresholdValue) { return; }
+    settingCompactionThresholdValue.textContent = settingCompactionThreshold.value + '%';
+  });
+
+  addListener(settingCompactionThreshold, 'change', () => {
+    if (!settingCompactionThreshold) { return; }
+    const value = parseInt(settingCompactionThreshold.value, 10);
+    if (!Number.isFinite(value)) { return; }
+    saveFeatureSetting('context.compactionThresholdPercent', value);
   });
 
   addListener(mcpSettingsBtn, 'click', () => {
@@ -1047,8 +1122,62 @@
         if (timeoutGroup) { timeoutGroup.style.display = message.method === 'semi-automatic' ? '' : 'none'; }
         break;
       }
+      case 'featureSettingsLoaded':
+        applyFeatureSettings(message.settings || {});
+        break;
     }
   });
+
+  function applyFeatureSettings(settings) {
+    featureSettings = {
+      chat: {
+        enableSlashCommandAutocomplete: settings?.chat?.enableSlashCommandAutocomplete !== false,
+        enableFileReferenceAutocomplete: settings?.chat?.enableFileReferenceAutocomplete !== false,
+        enableCommandQueue: settings?.chat?.enableCommandQueue !== false,
+        showContextTracker: settings?.chat?.showContextTracker !== false,
+        activeFileByDefault: !!settings?.chat?.activeFileByDefault,
+        planningModeByDefault: !!settings?.chat?.planningModeByDefault,
+      },
+      context: {
+        includeSkills: settings?.context?.includeSkills !== false,
+        includeAgentsMd: settings?.context?.includeAgentsMd !== false,
+        includeMemoryBank: settings?.context?.includeMemoryBank !== false,
+        compactionThresholdPercent: Number.isFinite(settings?.context?.compactionThresholdPercent)
+          ? settings.context.compactionThresholdPercent
+          : 80,
+      },
+      agent: {
+        maxToolIterations: Number.isFinite(settings?.agent?.maxToolIterations)
+          ? settings.agent.maxToolIterations
+          : 25,
+      },
+    };
+
+    if (settingEnableSlashAutocomplete) { settingEnableSlashAutocomplete.checked = featureSettings.chat.enableSlashCommandAutocomplete; }
+    if (settingEnableFileAutocomplete) { settingEnableFileAutocomplete.checked = featureSettings.chat.enableFileReferenceAutocomplete; }
+    if (settingEnableCommandQueue) { settingEnableCommandQueue.checked = featureSettings.chat.enableCommandQueue; }
+    if (settingShowContextTracker) { settingShowContextTracker.checked = featureSettings.chat.showContextTracker; }
+    if (settingActiveFileDefault) { settingActiveFileDefault.checked = featureSettings.chat.activeFileByDefault; }
+    if (settingPlanningDefault) { settingPlanningDefault.checked = featureSettings.chat.planningModeByDefault; }
+    if (settingIncludeSkills) { settingIncludeSkills.checked = featureSettings.context.includeSkills; }
+    if (settingIncludeAgentsMd) { settingIncludeAgentsMd.checked = featureSettings.context.includeAgentsMd; }
+    if (settingIncludeMemoryBank) { settingIncludeMemoryBank.checked = featureSettings.context.includeMemoryBank; }
+    if (settingMaxToolIterations) { settingMaxToolIterations.value = String(featureSettings.agent.maxToolIterations); }
+    if (settingCompactionThreshold) { settingCompactionThreshold.value = String(featureSettings.context.compactionThresholdPercent); }
+    if (settingCompactionThresholdValue) { settingCompactionThresholdValue.textContent = featureSettings.context.compactionThresholdPercent + '%'; }
+
+    if (contextTracker) {
+      contextTracker.classList.toggle('hidden', !featureSettings.chat.showContextTracker);
+    }
+
+    if (!featureSettings.chat.enableCommandQueue) {
+      commandQueue = [];
+      renderQueue();
+    }
+
+    closeAutocomplete();
+    updateStreamingUI();
+  }
 
   // ===== Settings Functions =====
 
@@ -1539,12 +1668,20 @@
 
   // Update send button and input area based on streaming state
   function updateStreamingUI() {
+    const queueEnabled = !!featureSettings.chat.enableCommandQueue;
+    const queueOption = document.querySelector('.send-mode-option[data-mode="queue"]');
+    if (queueOption) {
+      queueOption.classList.toggle('hidden', !queueEnabled);
+    }
+
     if (isStreaming) {
-      sendBtn.disabled = false; // Always enabled — sends to queue when streaming
-      sendBtn.classList.add('queue-mode');
-      sendModeBtn.classList.add('queue-mode');
-      sendBtn.title = 'Add to queue (Ctrl+Enter) · Enter to steer';
-      inputEl.placeholder = 'Enter to steer · Ctrl+Enter to queue\u2026';
+      sendBtn.disabled = false;
+      sendBtn.classList.toggle('queue-mode', queueEnabled);
+      sendModeBtn.classList.toggle('queue-mode', queueEnabled);
+      sendBtn.title = queueEnabled ? 'Add to queue (Ctrl+Enter) · Enter to steer' : 'Enter to steer';
+      inputEl.placeholder = queueEnabled
+        ? 'Enter to steer · Ctrl+Enter to queue\u2026'
+        : 'Enter to steer\u2026';
       document.querySelectorAll('.steering-btn').forEach(btn => {
         btn.classList.add('interrupt');
         btn.title = 'Stop & ' + (btn.dataset.steer || 'steer');
@@ -1554,7 +1691,9 @@
       sendModeBtn.classList.remove('queue-mode');
       sendBtn.title = 'Send';
       sendBtn.disabled = false;
-      inputEl.placeholder = 'Ask YOLO Agent... (@ to reference files)';
+      inputEl.placeholder = featureSettings.chat.enableFileReferenceAutocomplete
+        ? 'Ask YOLO Agent... (@ to reference files)'
+        : 'Ask YOLO Agent...';
       document.querySelectorAll('.steering-btn').forEach(btn => {
         btn.classList.remove('interrupt');
         btn.title = '';
@@ -1586,13 +1725,15 @@
     };
 
     if (isStreaming) {
-      // Interrupt: stop current generation, queue the steering command.
-      // The messageComplete handler will fire processQueue() once the backend is idle.
       stopGeneration();
-      addToQueue(type);
-      // Fallback: if messageComplete doesn't fire within 600ms (edge case), try processing
-      setTimeout(() => processQueue(), 600);
-      return;
+      if (featureSettings.chat.enableCommandQueue) {
+        // Interrupt: stop current generation, queue the steering command.
+        // The messageComplete handler will fire processQueue() once the backend is idle.
+        addToQueue(type);
+        // Fallback: if messageComplete doesn't fire within 600ms (edge case), try processing
+        setTimeout(() => processQueue(), 600);
+        return;
+      }
     }
 
     const prompt = steeringPrompts[type] || type;
@@ -1620,6 +1761,10 @@
 
   // Queue management
   function addToQueue(typeOrItem) {
+    if (!featureSettings.chat.enableCommandQueue) {
+      return;
+    }
+
     const steeringNames = {
       continue: 'Continue',
       retry: 'Retry',
@@ -1656,7 +1801,7 @@
   }
 
   function renderQueue() {
-    if (commandQueue.length === 0) {
+    if (!featureSettings.chat.enableCommandQueue || commandQueue.length === 0) {
       queueSection.classList.add('hidden');
       return;
     }
@@ -1695,6 +1840,7 @@
   }
 
   function processQueue() {
+    if (!featureSettings.chat.enableCommandQueue) { return; }
     if (commandQueue.length === 0 || isStreaming) { return; }
 
     const next = commandQueue.shift();
@@ -1718,10 +1864,19 @@
   // ===== File Reference Autocomplete =====
 
   function detectAutocomplete() {
-    if (detectSlashCommand()) {
-      return;
+    if (featureSettings.chat.enableSlashCommandAutocomplete) {
+      if (detectSlashCommand()) {
+        return;
+      }
+    } else if (autocompleteType === 'command') {
+      closeAutocomplete();
     }
-    detectFileReference();
+
+    if (featureSettings.chat.enableFileReferenceAutocomplete) {
+      detectFileReference();
+    } else if (autocompleteType === 'file') {
+      closeAutocomplete();
+    }
   }
 
   function detectSlashCommand() {
@@ -2027,6 +2182,10 @@
   function sendToQueue() {
     const text = inputEl.value.trim();
     if (!text) { return; }
+    if (!featureSettings.chat.enableCommandQueue) {
+      sendSteer();
+      return;
+    }
     addToQueue({ type: 'custom', text });
     inputEl.value = '';
     inputEl.style.height = 'auto';
@@ -2038,9 +2197,13 @@
 
     // If streaming, queue the message instead of blocking
     if (isStreaming) {
-      addToQueue({ type: 'custom', text });
-      inputEl.value = '';
-      inputEl.style.height = 'auto';
+      if (featureSettings.chat.enableCommandQueue) {
+        addToQueue({ type: 'custom', text });
+        inputEl.value = '';
+        inputEl.style.height = 'auto';
+      } else {
+        sendSteer();
+      }
       return;
     }
 
@@ -2139,7 +2302,11 @@
     // Restore streaming state — the tool loop continues
     isAwaitingAnswer = false;
     isStreaming = true;
-    inputEl.placeholder = savedPlaceholder || 'Ask YOLO Agent... (@ to reference files)';
+    inputEl.placeholder = savedPlaceholder || (
+      featureSettings.chat.enableFileReferenceAutocomplete
+        ? 'Ask YOLO Agent... (@ to reference files)'
+        : 'Ask YOLO Agent...'
+    );
     updateStreamingUI();
     stopBtn.disabled = false;
   }

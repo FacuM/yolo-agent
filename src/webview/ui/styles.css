@@ -2518,6 +2518,12 @@ body {
   font-weight: 600;
 }
 
+.settings-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 /* ===== Timeout Slider ===== */
 .timeout-control {
   display: flex;

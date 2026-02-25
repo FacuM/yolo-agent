@@ -28,6 +28,7 @@ A VS Code coding agent powered by multiple AI providers. YOLO Agent gives you an
 - **Multi-session** — Run multiple agent sessions in the background and switch between them.
 - **Model selector** — Switch models on the fly from the top bar.
 - **Kilo Auto Model routing** — `kilo/auto` now passes mode-aware routing hints to Kilo Gateway.
+- **Customizable settings** — Kilo-style configurable chat/runtime options (autocomplete, queueing, context injection, compaction threshold, tool iteration limits) from both VS Code settings and the in-panel Settings UI.
 
 ## Getting Started
 

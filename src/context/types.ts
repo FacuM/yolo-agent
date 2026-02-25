@@ -41,6 +41,15 @@ export interface MemoryBank {
 }
 
 /**
+ * Controls which discovered context sections are injected into system prompts.
+ */
+export interface ContextPromptOptions {
+  includeSkills: boolean;
+  includeAgentsMd: boolean;
+  includeMemoryBanks: boolean;
+}
+
+/**
  * The formatted context injection for the system prompt
  */
 export interface ContextInjection {

@@ -51,7 +51,67 @@
     ],
     "configuration": {
       "title": "YOLO Agent",
-      "properties": {}
+      "properties": {
+        "yoloAgent.chat.enableSlashCommandAutocomplete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable slash command autocomplete in the chat input."
+        },
+        "yoloAgent.chat.enableFileReferenceAutocomplete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable @ file reference autocomplete in the chat input."
+        },
+        "yoloAgent.chat.enableCommandQueue": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow queueing messages while the agent is streaming."
+        },
+        "yoloAgent.chat.showContextTracker": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the context usage tracker and compact-on-click control."
+        },
+        "yoloAgent.chat.activeFileByDefault": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable active file context automatically for new chats."
+        },
+        "yoloAgent.chat.planningModeByDefault": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable planning mode automatically for new chats."
+        },
+        "yoloAgent.context.includeSkills": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include discovered skills in system prompt context injection."
+        },
+        "yoloAgent.context.includeAgentsMd": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include AGENTS.md and rules markdown files in system prompt context injection."
+        },
+        "yoloAgent.context.includeMemoryBank": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include memory-bank markdown files in system prompt context injection."
+        },
+        "yoloAgent.context.compactionThresholdPercent": {
+          "type": "number",
+          "default": 80,
+          "minimum": 50,
+          "maximum": 95,
+          "description": "Context usage percentage that triggers compaction checks."
+        },
+        "yoloAgent.agent.maxToolIterations": {
+          "type": "number",
+          "default": 25,
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum tool-calling iterations per response round."
+        }
+      }
     }
   },
   "scripts": {

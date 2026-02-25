@@ -15,7 +15,12 @@ import { ExitPlanningModeTool } from '../tools/planning';
 import { RunTerminalTool } from '../tools/terminal';
 import { LoopDetector } from '../tools/loop-detector';
 import { SandboxManager } from '../sandbox/manager';
-import { getCompactionSettings, saveCompactionSettings } from '../config/settings';
+import {
+  getCompactionSettings,
+  saveCompactionSettings,
+  getFeatureSettings,
+  updateFeatureSetting,
+} from '../config/settings';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'yoloAgent.chatView';
@@ -105,11 +110,11 @@ Rules:
 - If all items are DONE, end with "ALL TODOS VERIFIED".
 - You do NOT have access to tools. Base your verification ONLY on the workspace files shown below.`;
 
-  /** Maximum tool-call ↔ LLM iterations within a single round */
-  private static readonly MAX_TOOL_ITERATIONS = 25;
+  /** Default maximum tool-call ↔ LLM iterations within a single round */
+  private static readonly DEFAULT_MAX_TOOL_ITERATIONS = 25;
 
-  /** Fraction of context window used before triggering auto-compaction */
-  private static readonly CONTEXT_COMPACTION_THRESHOLD = 0.80;
+  /** Default fraction of context window used before triggering auto-compaction */
+  private static readonly DEFAULT_CONTEXT_COMPACTION_THRESHOLD = 0.80;
 
   /** System prompt for compacting conversation context */
   private static readonly COMPACTION_PROMPT = `You are a context compaction assistant. Produce a concise but complete summary that preserves all information needed to continue the work without re-exploring the codebase.
@@ -166,6 +171,7 @@ Keep each section compact and information-dense. This summary will replace the f
   private globalState: vscode.Memento;
   private compactionResolver: ((action: 'compacted' | 'cancelled') => void) | null = null;
   private compactionPendingSessionId: string | null = null;
+  private configChangeHookRegistered = false;
 
   constructor(
     globalState: vscode.Memento,
@@ -190,6 +196,10 @@ Keep each section compact and information-dense. This summary will replace the f
     this.mcpClient = mcpClient;
     this.sandboxManager = sandboxManager;
     this.sessionManager = new SessionManager();
+
+    const featureSettings = getFeatureSettings();
+    this.activeFileEnabled = featureSettings.chat.activeFileByDefault;
+    this.planningMode = featureSettings.chat.planningModeByDefault;
 
     // Notify webview whenever session list changes
     this.sessionManager.onDidChange = () => {
@@ -467,6 +477,31 @@ Keep each section compact and information-dense. This summary will replace the f
             ...getCompactionSettings(this.globalState),
           });
           break;
+        case 'getFeatureSettings':
+          this.sendFeatureSettings();
+          break;
+        case 'updateFeatureSetting':
+          if (typeof message.key === 'string') {
+            try {
+              await updateFeatureSetting(message.key, message.value);
+              const settings = getFeatureSettings();
+              if (message.key === 'chat.activeFileByDefault') {
+                this.activeFileEnabled = settings.chat.activeFileByDefault;
+                this.sendActiveFileState();
+              }
+              if (message.key === 'chat.planningModeByDefault') {
+                this.planningMode = settings.chat.planningModeByDefault;
+                this.postMessage({ type: 'planningModeChanged', enabled: this.planningMode });
+              }
+              this.sendFeatureSettings();
+            } catch (err) {
+              this.postMessage({
+                type: 'error',
+                message: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+          break;
 
         // Active file context
         case 'toggleActiveFile':
@@ -505,6 +540,8 @@ Keep each section compact and information-dense. This summary will replace the f
     this.handleGetContext();
     this.sendSessionList();
     this.sendSandboxState();
+    this.sendFeatureSettings();
+    this.postMessage({ type: 'planningModeChanged', enabled: this.planningMode });
 
     // Auto-restore the active session so the webview picks up where it left off
     const activeSession = this.sessionManager.getActiveSession();
@@ -516,6 +553,27 @@ Keep each section compact and information-dense. This summary will replace the f
     this.registry.onDidChangeProviders(() => {
       this.sendProviderList();
     });
+
+    if (!this.configChangeHookRegistered) {
+      this.configChangeHookRegistered = true;
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (!event.affectsConfiguration('yoloAgent')) {
+          return;
+        }
+
+        const settings = getFeatureSettings();
+        if (event.affectsConfiguration('yoloAgent.chat.activeFileByDefault')) {
+          this.activeFileEnabled = settings.chat.activeFileByDefault;
+          this.sendActiveFileState();
+        }
+        if (event.affectsConfiguration('yoloAgent.chat.planningModeByDefault')) {
+          this.planningMode = settings.chat.planningModeByDefault;
+          this.postMessage({ type: 'planningModeChanged', enabled: this.planningMode });
+        }
+
+        this.sendFeatureSettings();
+      });
+    }
 
     // Listen for sandbox state changes
     if (this.sandboxManager) {
@@ -559,6 +617,28 @@ Keep each section compact and information-dense. This summary will replace the f
     } else {
       this.sessionManager.bufferMessage(sessionId, message as BufferedMessage);
     }
+  }
+
+  private getMaxToolIterations(): number {
+    const configured = getFeatureSettings().agent.maxToolIterations;
+    return Number.isFinite(configured) && configured > 0
+      ? configured
+      : ChatViewProvider.DEFAULT_MAX_TOOL_ITERATIONS;
+  }
+
+  private getContextCompactionThreshold(): number {
+    const percent = getFeatureSettings().context.compactionThresholdPercent;
+    if (!Number.isFinite(percent)) {
+      return ChatViewProvider.DEFAULT_CONTEXT_COMPACTION_THRESHOLD;
+    }
+    return Math.min(Math.max(percent, 50), 95) / 100;
+  }
+
+  private sendFeatureSettings(): void {
+    this.postMessage({
+      type: 'featureSettingsLoaded',
+      settings: getFeatureSettings(),
+    });
   }
 
   private static readonly SLASH_MODE_MAP: Record<string, ModeId> = {
@@ -789,7 +869,12 @@ IMPORTANT RULES:
 
     // Add context from skills and context files (AGENTS.md, .github/*.md, .*/rules/*.md)
     // Pass the user message so skill trigger keywords can be matched
-    const contextAddition = this.contextManager.getSystemPromptAddition(userText);
+    const featureSettings = getFeatureSettings();
+    const contextAddition = this.contextManager.getSystemPromptAddition(userText, {
+      includeSkills: featureSettings.context.includeSkills,
+      includeAgentsMd: featureSettings.context.includeAgentsMd,
+      includeMemoryBanks: featureSettings.context.includeMemoryBank,
+    });
     if (contextAddition) {
       modePrompt += '\n\n' + contextAddition;
     }
@@ -869,7 +954,7 @@ IMPORTANT RULES:
         // Use inputTokens (last API call's full prompt size) as the context pressure metric.
         // This avoids the double-counting that occurred when summing input + output tokens.
         const contextUsed = preCheckUsage.inputTokens;
-        if (contextLimit > 0 && contextUsed > contextLimit * ChatViewProvider.CONTEXT_COMPACTION_THRESHOLD && toolIteration > 0) {
+        if (contextLimit > 0 && contextUsed > contextLimit * this.getContextCompactionThreshold() && toolIteration > 0) {
           const settings = getCompactionSettings(this.globalState);
           const percentage = Math.round((contextUsed / contextLimit) * 100);
 
@@ -946,7 +1031,7 @@ IMPORTANT RULES:
         }
 
         // ── If the LLM requested tool calls, execute & feed results back ──
-        if (response.toolCalls && response.toolCalls.length > 0 && toolIteration < ChatViewProvider.MAX_TOOL_ITERATIONS) {
+        if (response.toolCalls && response.toolCalls.length > 0 && toolIteration < this.getMaxToolIterations()) {
           toolIteration++;
 
           // Store assistant turn (with tool-call metadata) in conversation + history
@@ -1129,7 +1214,7 @@ IMPORTANT RULES:
             this.sessionManager.addMessage(sessionId, { role: 'assistant', content: responseText });
           }
 
-          if (toolIteration >= ChatViewProvider.MAX_TOOL_ITERATIONS && response.toolCalls?.length) {
+          if (toolIteration >= this.getMaxToolIterations() && response.toolCalls?.length) {
             this.postSessionMessage(sessionId, {
               type: 'streamChunk',
               content: '\n\n\u26A0\uFE0F *Reached maximum tool iterations. Stopping.*\n',
@@ -2899,6 +2984,36 @@ IMPORTANT RULES:
                 <button class="timeout-preset" data-value="60">60s</button>
                 <button class="timeout-preset" data-value="120">2m</button>
                 <button class="timeout-preset" data-value="300">5m</button>
+              </div>
+            </div>
+          </div>
+          <div class="settings-section">
+            <h3>Chat Behavior</h3>
+            <div class="checkbox-group settings-checkbox-group">
+              <label><input type="checkbox" id="setting-enable-slash-autocomplete"> Enable slash command autocomplete</label>
+              <label><input type="checkbox" id="setting-enable-file-autocomplete"> Enable file reference autocomplete (@)</label>
+              <label><input type="checkbox" id="setting-enable-command-queue"> Enable command queue while streaming</label>
+              <label><input type="checkbox" id="setting-show-context-tracker"> Show context tracker bar</label>
+              <label><input type="checkbox" id="setting-active-file-default"> Enable active file context by default</label>
+              <label><input type="checkbox" id="setting-planning-default"> Enable planning mode by default</label>
+            </div>
+          </div>
+          <div class="settings-section">
+            <h3>Agent Runtime</h3>
+            <div class="checkbox-group settings-checkbox-group">
+              <label><input type="checkbox" id="setting-include-skills"> Include discovered skills in system prompt</label>
+              <label><input type="checkbox" id="setting-include-agents-md"> Include AGENTS.md and rules files in system prompt</label>
+              <label><input type="checkbox" id="setting-include-memory-bank"> Include memory bank files in system prompt</label>
+            </div>
+            <div class="form-group">
+              <label for="setting-max-tool-iterations">Max tool iterations per round</label>
+              <input type="number" id="setting-max-tool-iterations" min="1" max="200" step="1">
+            </div>
+            <div class="form-group">
+              <label for="setting-compaction-threshold">Compaction trigger threshold</label>
+              <div class="timeout-control">
+                <input type="range" id="setting-compaction-threshold" min="50" max="95" value="80" step="1" class="timeout-slider">
+                <span id="setting-compaction-threshold-value" class="timeout-value">80%</span>
               </div>
             </div>
           </div>
