@@ -20,8 +20,9 @@
   const mcpView = document.getElementById('mcp-view');
   const mcpEditorView = document.getElementById('mcp-editor-view');
   const sessionsView = document.getElementById('sessions-view');
+  const digestView = document.getElementById('digest-view');
 
-  let currentView = 'chat'; // 'chat' | 'settings' | 'editor' | 'context' | 'mcp' | 'mcp-editor' | 'sessions'
+  let currentView = 'chat'; // 'chat' | 'settings' | 'editor' | 'context' | 'mcp' | 'mcp-editor' | 'sessions' | 'digest'
 
   function showView(view) {
     currentView = view;
@@ -32,6 +33,7 @@
     mcpView.classList.toggle('hidden', view !== 'mcp');
     mcpEditorView.classList.toggle('hidden', view !== 'mcp-editor');
     sessionsView.classList.toggle('hidden', view !== 'sessions');
+    digestView.classList.toggle('hidden', view !== 'digest');
   }
 
   // ===== Chat View Elements =====
@@ -113,13 +115,30 @@
   const deleteProfileArea = document.getElementById('delete-profile-area');
   const deleteProfileBtn = document.getElementById('delete-profile-btn');
 
+  // ===== Compaction Banner Elements =====
+  const compactionBanner = document.getElementById('compaction-banner');
+  const compactionBannerText = document.getElementById('compaction-banner-text');
+  const compactionEditBtn = document.getElementById('compaction-edit-btn');
+  const compactionNowBtn = document.getElementById('compaction-now-btn');
+
+  // ===== Digest Editor Elements =====
+  const digestBackBtn = document.getElementById('digest-back-btn');
+  const digestTextarea = /** @type {HTMLTextAreaElement} */ (document.getElementById('digest-textarea'));
+  const digestCompactBtn = document.getElementById('digest-compact-btn');
+  const digestCancelBtn = document.getElementById('digest-cancel-btn');
+
   // ===== Settings Tabs =====
   const tabProviders = document.getElementById('tab-providers');
   const tabMcp = document.getElementById('tab-mcp');
+  const tabGeneral = document.getElementById('tab-general');
   const providersPanel = document.getElementById('providers-panel');
   const mcpPanel = document.getElementById('mcp-panel');
+  const generalPanel = document.getElementById('general-panel');
   const mcpSettingsBtn = document.getElementById('mcp-settings-btn');
   const mcpServersInlineList = document.getElementById('mcp-servers-inline-list');
+  const compactionMethodGroup = document.getElementById('compaction-method-group');
+  const compactionTimeoutInput = /** @type {HTMLInputElement} */ (document.getElementById('compaction-timeout'));
+  const timeoutGroup = document.getElementById('timeout-group');
 
   // ===== MCP View Elements =====
   const mcpBackBtn = document.getElementById('mcp-back-btn');
@@ -434,6 +453,69 @@
     vscode.postMessage({ type: 'compactContext' });
   });
 
+  // ===== Compaction Countdown State =====
+  let compactionTimer = null;
+  let compactionDigest = '';
+
+  function startCompactionCountdown(timeout, digest, percentage) {
+    compactionDigest = digest;
+    compactionBannerText.textContent = 'Context at ' + percentage + '% \u2014 auto-compacting in ' + timeout + 's...';
+    compactionBanner.classList.remove('hidden');
+
+    let remaining = timeout;
+    compactionTimer = setInterval(() => {
+      remaining--;
+      compactionBannerText.textContent = 'Context at ' + percentage + '% \u2014 auto-compacting in ' + remaining + 's...';
+      if (remaining <= 0) {
+        clearCompactionCountdown();
+        vscode.postMessage({ type: 'compactNow' });
+      }
+    }, 1000);
+  }
+
+  function clearCompactionCountdown() {
+    if (compactionTimer) {
+      clearInterval(compactionTimer);
+      compactionTimer = null;
+    }
+    compactionBanner.classList.add('hidden');
+  }
+
+  function showCompactionPending(digest, percentage) {
+    compactionDigest = digest;
+    compactionBannerText.textContent = 'Context at ' + percentage + '% \u2014 waiting for manual compaction...';
+    compactionBanner.classList.remove('hidden');
+  }
+
+  // Compaction banner buttons
+  compactionEditBtn.addEventListener('click', () => {
+    clearCompactionCountdown();
+    digestTextarea.value = compactionDigest;
+    showView('digest');
+  });
+
+  compactionNowBtn.addEventListener('click', () => {
+    clearCompactionCountdown();
+    vscode.postMessage({ type: 'compactNow' });
+  });
+
+  // ===== Digest Editor Event Listeners =====
+  digestBackBtn.addEventListener('click', () => {
+    showView('chat');
+    vscode.postMessage({ type: 'compactCancel' });
+  });
+
+  digestCancelBtn.addEventListener('click', () => {
+    showView('chat');
+    vscode.postMessage({ type: 'compactCancel' });
+  });
+
+  digestCompactBtn.addEventListener('click', () => {
+    const editedDigest = digestTextarea.value;
+    showView('chat');
+    vscode.postMessage({ type: 'compactWithDigest', editedDigest });
+  });
+
   // ===== Settings Event Listeners =====
   settingsBackBtn.addEventListener('click', () => {
     showView('chat');
@@ -443,16 +525,51 @@
   tabProviders.addEventListener('click', () => {
     tabProviders.classList.add('active');
     tabMcp.classList.remove('active');
+    tabGeneral.classList.remove('active');
     providersPanel.classList.remove('hidden');
     mcpPanel.classList.add('hidden');
+    generalPanel.classList.add('hidden');
   });
 
   tabMcp.addEventListener('click', () => {
     tabMcp.classList.add('active');
     tabProviders.classList.remove('active');
+    tabGeneral.classList.remove('active');
     mcpPanel.classList.remove('hidden');
     providersPanel.classList.add('hidden');
+    generalPanel.classList.add('hidden');
     vscode.postMessage({ type: 'getMcpServers' });
+  });
+
+  tabGeneral.addEventListener('click', () => {
+    tabGeneral.classList.add('active');
+    tabProviders.classList.remove('active');
+    tabMcp.classList.remove('active');
+    generalPanel.classList.remove('hidden');
+    providersPanel.classList.add('hidden');
+    mcpPanel.classList.add('hidden');
+    vscode.postMessage({ type: 'getCompactionSettings' });
+  });
+
+  // Compaction method radio change
+  compactionMethodGroup.addEventListener('change', (e) => {
+    const method = e.target.value;
+    timeoutGroup.style.display = method === 'semi-automatic' ? '' : 'none';
+    vscode.postMessage({
+      type: 'saveCompactionSettings',
+      method,
+      timeoutSeconds: parseInt(compactionTimeoutInput.value, 10) || 60,
+    });
+  });
+
+  // Timeout input change
+  compactionTimeoutInput.addEventListener('change', () => {
+    const selectedMethod = compactionMethodGroup.querySelector('input[name="compaction-method"]:checked');
+    vscode.postMessage({
+      type: 'saveCompactionSettings',
+      method: selectedMethod ? selectedMethod.value : 'semi-automatic',
+      timeoutSeconds: parseInt(compactionTimeoutInput.value, 10) || 60,
+    });
   });
 
   mcpSettingsBtn.addEventListener('click', () => {
@@ -801,6 +918,30 @@
       case 'contextUsage':
         updateContextTracker(message);
         break;
+
+      // Compaction messages
+      case 'compactionCountdown':
+        startCompactionCountdown(message.timeout, message.digest, message.percentage);
+        break;
+      case 'compactionPending':
+        showCompactionPending(message.digest, message.percentage);
+        break;
+      case 'compactionComplete':
+        clearCompactionCountdown();
+        compactionBanner.classList.add('hidden');
+        if (currentView === 'digest') {
+          showView('chat');
+        }
+        break;
+      case 'compactionSettings': {
+        const methodRadio = compactionMethodGroup.querySelector(
+          'input[value="' + message.method + '"]'
+        );
+        if (methodRadio) { methodRadio.checked = true; }
+        compactionTimeoutInput.value = message.timeoutSeconds || 60;
+        timeoutGroup.style.display = message.method === 'semi-automatic' ? '' : 'none';
+        break;
+      }
     }
   });
 
