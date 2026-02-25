@@ -2039,6 +2039,14 @@
     }).join('\n');
   }
 
+  function insertToolCard(card) {
+    if (currentAssistantEl && currentAssistantEl.parentNode === messagesEl) {
+      messagesEl.insertBefore(card, currentAssistantEl);
+    } else {
+      messagesEl.appendChild(card);
+    }
+  }
+
   function handleToolCallStarted(name, id, args) {
     const card = document.createElement('div');
     card.className = 'tool-call';
@@ -2104,7 +2112,7 @@
 
     card.appendChild(header);
     card.appendChild(contentEl);
-    messagesEl.appendChild(card);
+    insertToolCard(card);
     scrollToBottom();
   }
 
@@ -2282,23 +2290,24 @@
     // Hide the raw assistant message — the plan card replaces it visually
     assistantEl.style.display = 'none';
 
-    // Collapse exploration tool-call cards that appeared between the assistant
-    // message and the end of the messages list (they were used during planning
-    // and are no longer the primary focus).
+    // Collapse exploration tool-call cards adjacent to this assistant turn.
+    // Supports both placements: before assistant (default tool layout) or
+    // after assistant (legacy layout).
     const toolCallsWrapper = document.createElement('details');
     toolCallsWrapper.className = 'plan-exploration-details';
     const summary = document.createElement('summary');
     summary.textContent = 'Show exploration steps';
     toolCallsWrapper.appendChild(summary);
-    // Gather tool-call siblings after the hidden assistant message
     const toolCards = [];
-    let sibling = assistantEl.nextSibling;
-    while (sibling) {
-      const next = sibling.nextSibling; // save before moving
-      if (sibling.nodeType === 1 && /** @type {Element} */ (sibling).classList.contains('tool-call')) {
-        toolCards.push(sibling);
-      }
-      sibling = next;
+    let prev = assistantEl.previousSibling;
+    while (prev && prev.nodeType === 1 && /** @type {Element} */ (prev).classList.contains('tool-call')) {
+      toolCards.unshift(prev);
+      prev = prev.previousSibling;
+    }
+    let next = assistantEl.nextSibling;
+    while (next && next.nodeType === 1 && /** @type {Element} */ (next).classList.contains('tool-call')) {
+      toolCards.push(next);
+      next = next.nextSibling;
     }
     if (toolCards.length > 0) {
       // Insert wrapper where the first tool card was
