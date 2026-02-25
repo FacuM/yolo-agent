@@ -37,6 +37,64 @@ function truncateOutput(s: string): string {
   return `${head}\n\n... [${skipped} characters truncated] ...\n\n${tail}`;
 }
 
+/**
+ * Git safety validation — blocks destructive git operations.
+ * Patterns are based on Claude Code's battle-tested git safety protocol.
+ */
+function checkGitSafety(command: string): { allowed: boolean; reason?: string } {
+  // Only check commands that contain 'git'
+  if (!command.includes('git')) {
+    return { allowed: true };
+  }
+
+  const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+    {
+      pattern: /git\s+push\s+.*--force(?!-with-lease)/,
+      reason: 'git push --force can overwrite remote history. Use --force-with-lease for safer force pushes, or remove --force.',
+    },
+    {
+      pattern: /git\s+push\s+.*-f(?:\s|$)/,
+      reason: 'git push -f can overwrite remote history. Use --force-with-lease for safer force pushes.',
+    },
+    {
+      pattern: /git\s+reset\s+--hard/,
+      reason: 'git reset --hard discards all uncommitted changes permanently. Use git stash to save changes first.',
+    },
+    {
+      pattern: /git\s+clean\s+.*-f/,
+      reason: 'git clean -f permanently deletes untracked files. Review with git clean -n (dry run) first.',
+    },
+    {
+      pattern: /git\s+checkout\s+\.\s*$/,
+      reason: 'git checkout . discards all unstaged changes. Use git stash to save changes first.',
+    },
+    {
+      pattern: /git\s+restore\s+\.\s*$/,
+      reason: 'git restore . discards all unstaged changes. Use git stash to save changes first.',
+    },
+    {
+      pattern: /git\s+(push|commit|rebase|merge|am)\s+.*--no-verify/,
+      reason: 'Skipping hooks with --no-verify bypasses safety checks. Remove --no-verify to run hooks normally.',
+    },
+    {
+      pattern: /git\s+branch\s+-D\s/,
+      reason: 'git branch -D force-deletes a branch even if unmerged. Use -d for safe deletion.',
+    },
+    {
+      pattern: /git\s+config\s+(--global|--system)/,
+      reason: 'Modifying global/system git config can affect other projects. Use --local for project-specific config.',
+    },
+  ];
+
+  for (const { pattern, reason } of DANGEROUS_PATTERNS) {
+    if (pattern.test(command)) {
+      return { allowed: false, reason };
+    }
+  }
+
+  return { allowed: true };
+}
+
 export interface CommandResult {
   stdout: string;
   stderr: string;
@@ -62,6 +120,11 @@ export class RunTerminalTool implements Tool {
     description:
       `Execute a shell command and return its stdout/stderr output.
 
+IMPORTANT — when NOT to use this tool:
+- To read files: use readFile instead of cat/head/tail.
+- To write files: use writeFile instead of echo/cat redirects.
+- To search files: use listFiles instead of find/ls.
+
 Commands are monitored in real-time with stall detection:
 - If no output is produced for 60s (stall timeout), the command is killed.
 - Maximum total runtime is 300s (5 minutes).
@@ -70,7 +133,13 @@ Commands are monitored in real-time with stall detection:
 Examples of commands needing higher timeouts:
 - npm install / yarn install → timeout: 600
 - Large builds → timeout: 600
-- Test suites → timeout: 600, stallTimeout: 120`,
+- Test suites → timeout: 600, stallTimeout: 120
+
+Git safety rules:
+- Never run destructive git commands (push --force, reset --hard, clean -f) unless the user explicitly requested it.
+- Never use --no-verify to skip hooks unless explicitly asked.
+- Prefer staging specific files (git add file1 file2) over git add -A or git add .
+- Always quote file paths that contain spaces with double quotes.`,
     parameters: {
       type: 'object',
       properties: {
@@ -104,6 +173,15 @@ Examples of commands needing higher timeouts:
     const cwd = params.cwd as string | undefined;
     const maxTimeoutSec = (params.timeout as number) || 300;
     const stallTimeoutSec = (params.stallTimeout as number) || 60;
+
+    // Git safety: block destructive git operations unless explicitly allowed
+    const gitSafetyCheck = checkGitSafety(command);
+    if (!gitSafetyCheck.allowed) {
+      return {
+        content: `Git safety: ${gitSafetyCheck.reason}`,
+        isError: true,
+      };
+    }
 
     // Check sandbox restrictions if in sandbox mode
     if (this.sandboxManager) {

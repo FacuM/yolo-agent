@@ -13,6 +13,7 @@ import { ChatMessage, ToolResult as ProviderToolResult } from '../providers/type
 import { AskQuestionTool } from '../tools/question';
 import { ExitPlanningModeTool } from '../tools/planning';
 import { RunTerminalTool } from '../tools/terminal';
+import { LoopDetector } from '../tools/loop-detector';
 import { SandboxManager } from '../sandbox/manager';
 import { getCompactionSettings, saveCompactionSettings } from '../config/settings';
 
@@ -111,24 +112,38 @@ Rules:
   private static readonly CONTEXT_COMPACTION_THRESHOLD = 0.80;
 
   /** System prompt for compacting conversation context */
-  private static readonly COMPACTION_PROMPT = `You are a context compaction assistant. Produce a concise but complete summary that preserves:
-- All key decisions made
-- Current state of work (what's done, what's pending)
-- Important file paths, code snippets, or technical details mentioned
-- Any errors encountered and their resolutions
-- The user's original request and goals
+  private static readonly COMPACTION_PROMPT = `You are a context compaction assistant. Produce a concise but complete summary that preserves all information needed to continue the work without re-exploring the codebase.
 
 Output format (use these exact headings):
 
 ## User Request
-## Decisions Made
-## Work Completed
-## Remaining Work
-## Files and Symbols
-## Errors and Fixes
-## Next Step
+The original request and high-level goal. Quote the user's exact words when possible.
 
-Keep each section compact and information-dense. This summary will replace the full conversation history.`;
+## Decisions Made
+Key architectural and implementation decisions, with brief rationale.
+
+## Work Completed
+What has been done so far, with specific file paths and changes made.
+
+## Remaining Work
+What still needs to be done, prioritized.
+
+## Failed Approaches
+Approaches that were tried and DID NOT WORK, with the specific error or reason they failed. This section is CRITICAL — it prevents re-attempting the same broken approaches after compaction.
+
+## Files and Symbols
+Important file paths, function names, class names, and code patterns discovered. Include line numbers where relevant.
+
+## Errors and Fixes
+Errors encountered and how they were resolved (or if they remain unresolved).
+
+## Context to Preserve
+Any constraints, user preferences, environment details, or important context that would be lost without explicit preservation.
+
+## Next Step
+The single most important next action to take.
+
+Keep each section compact and information-dense. This summary will replace the full conversation history, so nothing important should be omitted.`;
 
   // ===== Instance fields =====
 
@@ -748,12 +763,10 @@ IMPORTANT RULES:
 
       let toolIteration = 0;
       let keepLooping = true;
-      const recentToolCalls: string[] = []; // Track recent tool signatures for loop detection
-
       // Use cumulative nudge count from the smart-todo plan if available,
       // so that nudge escalation persists across execute→verify→execute cycles.
       const smartTodo = this.sessionManager.getSmartTodo(sessionId);
-      let nudgesSent = smartTodo?.cumulativeNudges ?? 0;
+      const loopDetector = new LoopDetector(smartTodo?.cumulativeNudges ?? 0);
 
       while (keepLooping) {
         // Check abort before each provider call
@@ -766,10 +779,12 @@ IMPORTANT RULES:
         // ── Pre-overflow check: context compaction based on settings ──
         const preCheckUsage = this.sessionManager.getTokenUsage(sessionId);
         const contextLimit = await this.getActiveContextWindow();
-        const totalUsed = preCheckUsage.inputTokens + preCheckUsage.outputTokens;
-        if (contextLimit > 0 && totalUsed > contextLimit * ChatViewProvider.CONTEXT_COMPACTION_THRESHOLD && toolIteration > 0) {
+        // Use inputTokens (last API call's full prompt size) as the context pressure metric.
+        // This avoids the double-counting that occurred when summing input + output tokens.
+        const contextUsed = preCheckUsage.inputTokens;
+        if (contextLimit > 0 && contextUsed > contextLimit * ChatViewProvider.CONTEXT_COMPACTION_THRESHOLD && toolIteration > 0) {
           const settings = getCompactionSettings(this.globalState);
-          const percentage = Math.round((totalUsed / contextLimit) * 100);
+          const percentage = Math.round((contextUsed / contextLimit) * 100);
 
           if (settings.method === 'automatic') {
             // Current behavior: compact immediately
@@ -960,61 +975,19 @@ IMPORTANT RULES:
           // If aborted during tool execution, break out immediately
           if (abortCtrl.signal.aborted) { break; }
 
-          // ── Loop detection: catch identical calls, read-only spinning, AND error-retry cycling ──
-          // In planning mode, read-only exploration IS the desired behavior, so we
-          // skip the normal non-productive-round heuristic and only nudge on truly
-          // identical consecutive call batches (the LLM re-reading the same file).
-          const READ_ONLY_TOOLS = new Set(['listFiles', 'readFile', 'getDiagnostics', 'getSandboxStatus']);
+          // ── Loop detection via LoopDetector ──
           const callSigs = response.toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`).join('|');
-          recentToolCalls.push(callSigs);
-
-          // Lazily initialize tracking state on the array
-          if (!('nonProductiveStreak' in recentToolCalls)) {
-            (recentToolCalls as any).nonProductiveStreak = 0;
-            (recentToolCalls as any).toolErrorCounts = {} as Record<string, number>;
-          }
-
-          const hasError = toolResults.some(tr => tr.isError);
-
-          // Build a per-tool error map for this round
-          const errorToolNames = new Set<string>();
-          for (let i = 0; i < response.toolCalls.length; i++) {
-            if (toolResults[i]?.isError) {
-              const name = response.toolCalls[i].name;
-              errorToolNames.add(name);
-              const counts = (recentToolCalls as any).toolErrorCounts as Record<string, number>;
-              counts[name] = (counts[name] ?? 0) + 1;
-            }
-          }
-
-          // A round is "non-productive" if EVERY tool call either errored or is read-only.
-          // This catches the cycling pattern: runSandboxedCommand(error) → listFiles(ok) → repeat
-          // NOTE: In planning mode this check is skipped — read-only is the only option.
-          const allNonProductive = this.planningMode ? false : response.toolCalls.every((tc, i) =>
-            READ_ONLY_TOOLS.has(tc.name) || toolResults[i]?.isError
+          const loopResult = loopDetector.recordRound(
+            {
+              toolNames: response.toolCalls.map(tc => tc.name),
+              signature: callSigs,
+              errors: response.toolCalls.map((_, i) => !!toolResults[i]?.isError),
+            },
+            this.planningMode,
           );
-          (recentToolCalls as any).nonProductiveStreak = allNonProductive
-            ? (recentToolCalls as any).nonProductiveStreak + 1
-            : 0;
 
-          // Find tools that have errored (LLM keeps retrying a broken tool)
-          const repeatedErrorTools = Object.entries(
-            (recentToolCalls as any).toolErrorCounts as Record<string, number>
-          ).filter(([, count]) => count >= 1).map(([name]) => name);
-
-          const shouldNudge =
-            // 2 identical call batches in a row
-            (recentToolCalls.length >= 2 && recentToolCalls.slice(-2).every(s => s === recentToolCalls[recentToolCalls.length - 1])) ||
-            // 2+ consecutive non-productive rounds (read-only, errors, or mix of both)
-            (recentToolCalls as any).nonProductiveStreak >= 2 ||
-            // Any tool has errored — LLM should switch to an alternative immediately
-            repeatedErrorTools.length > 0;
-
-          if (shouldNudge) {
-            nudgesSent++;
-
-            // After 2 nudges the LLM clearly isn't responding to guidance — force-break
-            if (nudgesSent >= 2) {
+          if (loopResult.shouldNudge) {
+            if (loopResult.shouldForceBreak) {
               const forceMsg = this.planningMode
                 ? '[SYSTEM] Stopping tool loop: you have been re-reading the same files. ' +
                   'Output your implementation plan NOW using the required format (## Goal, ## Steps, ## Risks & Edge Cases, ## Verification). ' +
@@ -1028,7 +1001,6 @@ IMPORTANT RULES:
                 type: 'streamChunk',
                 content: '\n\n\u26A0\uFE0F *Detected persistent loop — forcing tool-loop exit.*\n',
               });
-              // Fall through to the final-response branch on next iteration
               keepLooping = false;
               break;
             }
@@ -1036,16 +1008,15 @@ IMPORTANT RULES:
             // Build a targeted nudge message
             let nudgeBody: string;
             if (this.planningMode) {
-              // Planning-mode nudge: the model is re-reading the same files
               nudgeBody = '[SYSTEM] You are reading the same files repeatedly. ' +
                 'You have gathered enough context. ' +
                 'STOP using tools and OUTPUT your implementation plan NOW using the required format (## Goal, ## Steps, ## Risks & Edge Cases, ## Verification).';
             } else {
               nudgeBody = '[SYSTEM] You are spinning without making progress. ';
-              if (repeatedErrorTools.length > 0) {
-                const toolList = repeatedErrorTools.join(', ');
+              if (loopResult.repeatedErrorTools.length > 0) {
+                const toolList = loopResult.repeatedErrorTools.join(', ');
                 nudgeBody += `The following tool(s) have FAILED: ${toolList}. STOP using them and try alternatives. `;
-                if (repeatedErrorTools.includes('runSandboxedCommand')) {
+                if (loopResult.repeatedErrorTools.includes('runSandboxedCommand')) {
                   nudgeBody += 'runSandboxedCommand requires createSandbox first — use runTerminal instead. ';
                 }
               }
@@ -1057,15 +1028,10 @@ IMPORTANT RULES:
                 'Implement the next pending TODO item RIGHT NOW with writeFile or runTerminal.';
             }
 
-            const nudge: ChatMessage = {
-              role: 'user',
-              content: nudgeBody,
-            };
+            const nudge: ChatMessage = { role: 'user', content: nudgeBody };
             messages.push(nudge);
             this.sessionManager.addMessage(sessionId, nudge);
-            recentToolCalls.length = 0;
-            (recentToolCalls as any).nonProductiveStreak = 0;
-            (recentToolCalls as any).toolErrorCounts = {};
+            loopDetector.reset();
           }
 
           // Loop back: the LLM will be called again with tool results
@@ -1090,7 +1056,7 @@ IMPORTANT RULES:
       // If aborted during the tool loop (not via thrown error), handle it here
       if (abortCtrl.signal.aborted) {
         // Persist cumulative nudge count back to smart-todo plan
-        if (smartTodo) { smartTodo.cumulativeNudges = nudgesSent; }
+        if (smartTodo) { smartTodo.cumulativeNudges = loopDetector.nudgeCount; }
         this.postSessionMessage(sessionId, {
           type: 'streamChunk',
           content: '\n\n*[Generation stopped]*',
@@ -1101,7 +1067,7 @@ IMPORTANT RULES:
       }
 
       // Persist cumulative nudge count back to smart-todo plan
-      if (smartTodo) { smartTodo.cumulativeNudges = nudgesSent; }
+      if (smartTodo) { smartTodo.cumulativeNudges = loopDetector.nudgeCount; }
 
       this.postSessionMessage(sessionId, { type: 'messageComplete' });
       this.sessionManager.setSessionStatus(sessionId, 'idle');
@@ -2524,14 +2490,17 @@ IMPORTANT RULES:
   private async sendContextUsage(sessionId: string): Promise<void> {
     const usage = this.sessionManager.getTokenUsage(sessionId);
     const contextWindow = await this.getActiveContextWindow();
-    const totalUsed = usage.inputTokens + usage.outputTokens;
-    const percentage = contextWindow > 0 ? Math.min(Math.round((totalUsed / contextWindow) * 100), 100) : 0;
+    // Use inputTokens as the primary context usage metric — it represents the full
+    // prompt size from the last API call (all prior messages + system prompt).
+    // Output tokens are tracked separately for display but don't add to context pressure
+    // since they're already included in the next call's input_tokens.
+    const percentage = contextWindow > 0 ? Math.min(Math.round((usage.inputTokens / contextWindow) * 100), 100) : 0;
 
     this.postSessionMessage(sessionId, {
       type: 'contextUsage',
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
-      totalTokens: totalUsed,
+      totalTokens: usage.inputTokens,
       contextWindow,
       percentage,
     });

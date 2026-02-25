@@ -26,7 +26,11 @@ export class ReadFileTool implements Tool {
   definition = {
     name: 'readFile',
     description:
-      'Read the contents of a file. Returns the file text, optionally limited to a line range.',
+      `Read the contents of a file. Returns the file text, optionally limited to a line range.
+
+IMPORTANT: Always read a file before modifying it with writeFile. Never propose changes to code you haven't read.
+Use startLine/endLine for large files instead of reading the entire file.
+Prefer this tool over runTerminal with cat/head/tail.`,
     parameters: {
       type: 'object',
       properties: {
@@ -113,7 +117,14 @@ export class WriteFileTool implements Tool {
   definition = {
     name: 'writeFile',
     description:
-      'Create or overwrite a file with the given content.',
+      `Create or overwrite a file with the given content.
+
+IMPORTANT:
+- Always read the file with readFile first before overwriting, to avoid losing existing content.
+- Prefer editing existing files over creating new files.
+- Do NOT create documentation files (README, changelog, .md) unless explicitly requested.
+- Do NOT use runTerminal with echo/cat redirects — use this tool instead.
+- Ensure parent directories exist (they are created automatically).`,
     parameters: {
       type: 'object',
       properties: {
@@ -198,7 +209,11 @@ export class ListFilesTool implements Tool {
   definition = {
     name: 'listFiles',
     description:
-      'List files in the workspace matching a glob pattern.',
+      `List files in the workspace matching a glob pattern.
+
+Use this tool instead of runTerminal with find or ls commands.
+Common patterns: "**/*.ts" (all TypeScript), "src/**" (everything in src), "*.json" (root JSON files).
+Use the exclude parameter to filter out irrelevant results (e.g., "node_modules/**").`,
     parameters: {
       type: 'object',
       properties: {

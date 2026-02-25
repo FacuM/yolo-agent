@@ -359,7 +359,10 @@ export class SessionManager {
   addTokenUsage(sessionId: string, inputTokens: number, outputTokens: number): void {
     const session = this.sessions.get(sessionId);
     if (!session) { return; }
-    session.tokenUsage.inputTokens += inputTokens;
+    // Use the latest input_tokens value (not cumulative) because each API response
+    // reports input_tokens as the FULL prompt size including all prior messages.
+    // Accumulating would double-count context that's already included in the next call.
+    session.tokenUsage.inputTokens = inputTokens;
     session.tokenUsage.outputTokens += outputTokens;
   }
 
